@@ -43,7 +43,7 @@ def wiener_deconvolution(observed, kernel, noise_power=0.01):
 
 def apply_filter(signal, kernel, filter_type='wiener', stats_fraction=0.2, noise_power=0.01):
     """Apply a filter (e.g., Wiener) with Poisson sampling."""
-    observed = signal.convolve(signal, kernel, mode='full')[:len(signal)]
+    observed = np.convolve(signal, kernel, mode='full')[:len(signal)]
     scaled_observed = observed * stats_fraction
     observed_poisson = poisson.rvs(scaled_observed)
     observed_poisson = np.clip(observed_poisson, 0, None)
