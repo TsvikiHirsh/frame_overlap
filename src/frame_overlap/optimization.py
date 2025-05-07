@@ -1,6 +1,7 @@
 import numpy as np
 import pandas as pd
 from lmfit import Model
+from scipy.stats import poisson
 
 def chi2_analysis(scaled_original, reconstructed, errors):
     """Calculate chi-squared and reduced chi-squared."""
