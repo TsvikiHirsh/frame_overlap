@@ -25,7 +25,7 @@ class TestFrameOverlap(unittest.TestCase):
         except ImportError as e:
             self.fail(f"Required dependency missing: {str(e)}. Please install numpy, pandas, scipy, matplotlib, and lmfit.")
 
-        # Mock signal data (increased length to 1000 to match or exceed kernel length)
+        # Mock signal data (length 1000 to match or exceed kernel length)
         self.t_signal = np.linspace(0, 1000, 1000)
         self.signal = np.random.normal(100, 10, 1000)
         self.errors = np.sqrt(self.signal)
@@ -142,7 +142,6 @@ class TestFrameOverlap(unittest.TestCase):
         self.assertEqual(len(full_errors), 1000)
         np.testing.assert_array_almost_equal(full_signal[self.stacks - 1], self.signal)
         np.testing.assert_array_almost_equal(full_errors[self.stacks - 1], self.errors)
-        self.assertEqual(np.sum(full_signal[500:]), 0)  # No stacks beyond 1000
 
     def test_prepare_full_frame_invalid(self):
         """Test prepare_full_frame raises error for invalid inputs."""

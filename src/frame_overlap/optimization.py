@@ -83,7 +83,7 @@ def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=50
     Raises
     ------
     ValueError
-        If input parameters are invalid (e.g., negative values, non-integer n_pulses).
+        If input parameters are invalid (e.g., negative values, non-positive n_pulses).
     ImportError
         If required analysis module components are not available.
 
@@ -102,7 +102,8 @@ def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=50
 
     # Input validation
     x = np.asarray(x, dtype=float)
-    if not isinstance(n_pulses, int) or n_pulses < 1:
+    n_pulses = int(n_pulses)  # Cast to integer to handle lmfit float inputs
+    if n_pulses < 1:
         raise ValueError("n_pulses must be a positive integer")
     if noise_power <= 0:
         raise ValueError("noise_power must be positive")
