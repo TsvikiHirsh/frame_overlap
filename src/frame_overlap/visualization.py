@@ -1,121 +1,85 @@
+import pandas as pd
 import matplotlib.pyplot as plt
-import numpy as np
 
-def plot_analysis(t_signal, original_signal, scaled_original, t_kernel, kernel, observed_poisson, reconstructed, residuals, chi2_per_dof):
+def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, reconstructed_df, residuals_df, chi2_per_dof):
     """
-    Plot comprehensive analysis of signal processing results.
+    Plot the analysis results including original signal, kernel, observed, reconstructed, and residuals.
 
     Parameters
     ----------
-    t_signal : array-like
-        Time array for the signal in microseconds.
-    original_signal : array-like
-        Original unscaled signal counts.
-    scaled_original : array-like
-        Scaled original signal counts.
-    t_kernel : array-like
-        Time array for the kernel in microseconds.
-    kernel : array-like
-        Kernel amplitude values.
-    observed_poisson : array-like
-        Observed signal after convolution and Poisson sampling.
-    reconstructed : array-like
-        Reconstructed signal after deconvolution.
-    residuals : array-like
-        Residuals (scaled_original - reconstructed).
+    t_signal_df : pandas.DataFrame
+        DataFrame with column 'time' for the x-axis.
+    signal_df : pandas.DataFrame
+        DataFrame with column 'counts' for the original signal.
+    scaled_df : pandas.DataFrame
+        DataFrame with column 'counts' for the scaled original signal.
+    kernel_df : pandas.DataFrame
+        DataFrame with columns 'kernel_time' and 'kernel_value' for the kernel.
+    observed_df : pandas.DataFrame
+        DataFrame with column 'observed' for the observed signal with noise.
+    reconstructed_df : pandas.DataFrame
+        DataFrame with column 'reconstructed' for the reconstructed signal.
+    residuals_df : pandas.DataFrame
+        DataFrame with column 'residuals' for the residuals (scaled - reconstructed).
     chi2_per_dof : float
-        Reduced chi-squared statistic.
-
-    Returns
-    -------
-    None
-        Displays a matplotlib figure with six subplots.
+        Reduced chi-squared statistic for the fit.
 
     Raises
     ------
     ValueError
-        If input arrays have inconsistent shapes or contain invalid values.
-    TypeError
-        If inputs are not array-like or contain non-numeric values.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> t = np.linspace(0, 1000, 100)
-    >>> sig = np.random.normal(100, 10, 100)
-    >>> scaled = sig * 0.2
-    >>> t_k = np.linspace(0, 1000, 100)
-    >>> k = np.ones(100) / 100
-    >>> obs = np.random.poisson(scaled)
-    >>> recon = obs * 1.1
-    >>> res = scaled - recon
-    >>> plot_analysis(t, sig, scaled, t_k, k, obs, recon, res, chi2_per_dof=1.234)
+        If input DataFrames lack required columns or have inconsistent lengths.
     """
-    # Convert inputs to numpy arrays and validate
-    arrays = {
-        't_signal': np.asarray(t_signal, dtype=float),
-        'original_signal': np.asarray(original_signal, dtype=float),
-        'scaled_original': np.asarray(scaled_original, dtype=float),
-        't_kernel': np.asarray(t_kernel, dtype=float),
-        'kernel': np.asarray(kernel, dtype=float),
-        'observed_poisson': np.asarray(observed_poisson, dtype=float),
-        'reconstructed': np.asarray(reconstructed, dtype=float),
-        'residuals': np.asarray(residuals, dtype=float)
+    required_columns = {
+        't_signal_df': 'time',
+        'signal_df': 'counts',
+        'scaled_df': 'counts',
+        'kernel_df': ['kernel_time', 'kernel_value'],
+        'observed_df': 'observed',
+        'reconstructed_df': 'reconstructed',
+        'residuals_df': 'residuals'
     }
     
-    # Check for consistent shapes
-    signal_length = len(arrays['t_signal'])
-    if not all(len(arr) == signal_length for arr in [arrays['original_signal'], arrays['scaled_original'], 
-                                                    arrays['observed_poisson'], arrays['reconstructed'], arrays['residuals']]):
-        raise ValueError("All signal-related arrays must have the same length")
-    if len(arrays['t_kernel']) != len(arrays['kernel']):
-        raise ValueError("t_kernel and kernel must have the same length")
-    if np.any([np.any(np.isnan(arr)) for arr in arrays.values()]):
-        raise ValueError("Input arrays must not contain NaN values")
-    if chi2_per_dof < 0:
-        raise ValueError("chi2_per_dof must be non-negative")
+    for df_name, cols in required_columns.items():
+        df = locals()[df_name]
+        if isinstance(cols, list):
+            if not all(col in df.columns for col in cols):
+                raise ValueError(f"{df_name} must have columns: {cols}")
+        else:
+            if cols not in df.columns:
+                raise ValueError(f"{df_name} must have column: {cols}")
+    
+    signal_length = len(t_signal_df)
+    if not all(len(df) == signal_length for df in [signal_df, scaled_df, observed_df, reconstructed_df, residuals_df]):
+        raise ValueError("All signal-related DataFrames must have the same length")
 
-    plt.figure(figsize=(12, 14))
+    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
     
-    plt.subplot(6, 1, 1)
-    plt.plot(arrays['t_signal'], arrays['original_signal'])
-    plt.title('Original Neutron Signal (Unscaled)')
-    plt.xlabel('Time (µs)')
-    plt.ylabel('Counts')
+    # Plot original and scaled signal
+    signal_df.plot(x=t_signal_df['time'], y='counts', ax=ax1, label='Original Signal', color='blue')
+    scaled_df.plot(x=t_signal_df['time'], y='counts', ax=ax1, label='Scaled Signal', color='green')
+    ax1.set_ylabel('Counts')
+    ax1.legend()
+    ax1.set_title('Original and Scaled Signal')
     
-    plt.subplot(6, 1, 2)
-    plt.plot(arrays['t_signal'], arrays['scaled_original'])
-    plt.title('Scaled Original Signal')
-    plt.xlabel('Time (µs)')
-    plt.ylabel('Counts')
+    # Plot kernel
+    kernel_df.plot(x='kernel_time', y='kernel_value', ax=ax2, label='Kernel', color='red')
+    ax2.set_ylabel('Kernel Value')
+    ax2.legend()
+    ax2.set_title('Kernel')
     
-    plt.subplot(6, 1, 3)
-    plt.plot(arrays['t_kernel'], arrays['kernel'])
-    plt.title('Random Kernel')
-    plt.xlabel('Time (µs)')
-    plt.ylabel('Amplitude')
+    # Plot observed and reconstructed signals
+    observed_df.plot(x=t_signal_df['time'], y='observed', ax=ax3, label='Observed (Poisson)', color='orange')
+    reconstructed_df.plot(x=t_signal_df['time'], y='reconstructed', ax=ax3, label='Reconstructed', color='purple')
+    ax3.set_ylabel('Counts')
+    ax3.legend()
+    ax3.set_title(f'Reconstructed Signal (Reduced Chi2: {chi2_per_dof:.2f})')
     
-    plt.subplot(6, 1, 4)
-    plt.plot(arrays['t_signal'], arrays['observed_poisson'])
-    plt.title('Observed Signal (Convolution + Poisson Sampling)')
-    plt.xlabel('Time (µs)')
-    plt.ylabel('Counts')
-    
-    plt.subplot(6, 1, 5)
-    plt.plot(arrays['t_signal'], arrays['scaled_original'], 'b-', alpha=0.7, label='Scaled Original')
-    plt.plot(arrays['t_signal'], arrays['reconstructed'], 'r--', alpha=0.7, label='Reconstructed')
-    plt.title(f'Scaled Original vs Reconstructed Signal (χ²/dof = {chi2_per_dof:.3f})')
-    plt.xlabel('Time (µs)')
-    plt.ylabel('Counts')
-    plt.legend()
-    
-    plt.subplot(6, 1, 6)
-    plt.plot(arrays['t_signal'], arrays['residuals'], 'k-', label='Residual (Scaled Original - Reconstructed)')
-    plt.axhline(0, color='gray', linestyle='--', alpha=0.5)
-    plt.title('Residuals')
-    plt.xlabel('Time (µs)')
-    plt.ylabel('Counts')
-    plt.legend()
+    # Plot residuals
+    residuals_df.plot(x=t_signal_df['time'], y='residuals', ax=ax4, label='Residuals', color='black')
+    ax4.set_ylabel('Residuals')
+    ax4.set_xlabel('Time')
+    ax4.legend()
+    ax4.set_title('Residuals')
     
     plt.tight_layout()
     plt.show()

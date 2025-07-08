@@ -3,18 +3,18 @@ import pandas as pd
 from lmfit import Model
 from scipy.stats import poisson
 
-def chi2_analysis(scaled_original, reconstructed, errors):
+def chi2_analysis(scaled_original_df, reconstructed_df, errors_df):
     """
     Calculate chi-squared and reduced chi-squared statistics for model fit evaluation.
 
     Parameters
     ----------
-    scaled_original : array-like
-        The scaled original signal data.
-    reconstructed : array-like
-        The reconstructed signal data from the model.
-    errors : array-like
-        The uncertainties associated with the scaled original signal.
+    scaled_original_df : pandas.DataFrame
+        DataFrame with column 'counts' containing the scaled original signal.
+    reconstructed_df : pandas.DataFrame
+        DataFrame with column 'reconstructed' containing the reconstructed signal.
+    errors_df : pandas.DataFrame
+        DataFrame with column 'errors' containing the uncertainties.
 
     Returns
     -------
@@ -27,22 +27,13 @@ def chi2_analysis(scaled_original, reconstructed, errors):
     ------
     ValueError
         If inputs have inconsistent shapes or contain invalid values (e.g., zero or negative errors).
-    TypeError
-        If inputs are not array-like or contain non-numeric values.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> scaled = np.array([1.0, 2.0, 3.0])
-    >>> recon = np.array([1.1, 2.1, 2.9])
-    >>> errs = np.array([0.1, 0.1, 0.1])
-    >>> chi2, chi2_dof = chi2_analysis(scaled, recon, errs)
-    >>> print(f"Chi2: {chi2:.2f}, Reduced Chi2: {chi2_dof:.2f}")
     """
-    # Input validation
-    scaled_original = np.asarray(scaled_original, dtype=float)
-    reconstructed = np.asarray(reconstructed, dtype=float)
-    errors = np.asarray(errors, dtype=float)
+    if 'counts' not in scaled_original_df.columns or 'reconstructed' not in reconstructed_df.columns or 'errors' not in errors_df.columns:
+        raise ValueError("Input DataFrames must have 'counts', 'reconstructed', and 'errors' columns respectively")
+    
+    scaled_original = scaled_original_df['counts'].to_numpy()
+    reconstructed = reconstructed_df['reconstructed'].to_numpy()
+    errors = errors_df['errors'].to_numpy()
     
     if scaled_original.shape != reconstructed.shape or scaled_original.shape != errors.shape:
         raise ValueError("All input arrays must have the same shape")
@@ -56,14 +47,14 @@ def chi2_analysis(scaled_original, reconstructed, errors):
     chi2_per_dof = chi2 / len(scaled_original)
     return chi2, chi2_per_dof
 
-def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=5000, stats_fraction=0.2):
+def deconvolution_model(signal_df, n_pulses, noise_power, pulse_duration, window_size=5000, stats_fraction=0.2):
     """
     Apply Wiener deconvolution to model a signal with specified parameters.
 
     Parameters
     ----------
-    x : array-like
-        Input signal to be convolved.
+    signal_df : pandas.DataFrame
+        DataFrame with column 'counts' containing the input signal.
     n_pulses : int
         Number of pulses in the kernel.
     noise_power : float
@@ -77,31 +68,19 @@ def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=50
 
     Returns
     -------
-    array-like
-        Reconstructed signal after Wiener deconvolution.
+    pandas.DataFrame
+        DataFrame with column 'reconstructed' containing the reconstructed signal.
 
     Raises
     ------
     ValueError
         If input parameters are invalid (e.g., negative values, non-positive n_pulses).
-    ImportError
-        If required analysis module components are not available.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> x = np.random.normal(0, 1, 1000)
-    >>> recon = deconvolution_model(x, n_pulses=5, noise_power=0.05, pulse_duration=200)
-    >>> recon.shape
-    (1000,)
     """
-    try:
-        from .analysis import generate_kernel, wiener_deconvolution, signal
-    except ImportError as e:
-        raise ImportError("Required analysis module components not found") from e
+    from .analysis import generate_kernel, wiener_deconvolution
 
-    # Input validation
-    x = np.asarray(x, dtype=float)
+    if 'counts' not in signal_df.columns:
+        raise ValueError("signal_df must have 'counts' column")
+    
     n_pulses = int(n_pulses)  # Cast to integer to handle lmfit float inputs
     if n_pulses < 1:
         raise ValueError("n_pulses must be a positive integer")
@@ -114,23 +93,24 @@ def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=50
     if stats_fraction <= 0 or stats_fraction > 1:
         raise ValueError("stats_fraction must be between 0 and 1")
 
-    kernel = generate_kernel(n_pulses, window_size=window_size, pulse_duration=pulse_duration)[1]
-    observed = signal.convolve(x, kernel, mode='full')[:len(x)]
+    kernel_df = generate_kernel(n_pulses, window_size=window_size, pulse_duration=pulse_duration)
+    observed = signal_df['counts'].to_numpy()
     scaled_observed = observed * stats_fraction
     observed_poisson = poisson.rvs(np.clip(scaled_observed, 0, None))
-    reconstructed = wiener_deconvolution(observed_poisson, kernel, noise_power=noise_power)
-    return reconstructed[:len(x)]
+    observed_df = pd.DataFrame({'counts': observed_poisson})
+    reconstructed_df = wiener_deconvolution(observed_df, kernel_df, noise_power=noise_power)
+    return reconstructed_df
 
-def optimize_parameters(t_signal, original_signal, initial_params=None):
+def optimize_parameters(t_signal_df, signal_df, initial_params=None):
     """
     Optimize deconvolution parameters using lmfit's least-squares minimization.
 
     Parameters
     ----------
-    t_signal : array-like
-        Time array or independent variable for the signal.
-    original_signal : array-like
-        Original signal to fit the model to.
+    t_signal_df : pandas.DataFrame
+        DataFrame with column 'time' containing the time array.
+    signal_df : pandas.DataFrame
+        DataFrame with column 'counts' containing the original signal.
     initial_params : dict, optional
         Initial parameter guesses with keys 'n_pulses', 'noise_power', 'pulse_duration'.
         Defaults to {'n_pulses': 5, 'noise_power': 0.05, 'pulse_duration': 200}.
@@ -144,30 +124,21 @@ def optimize_parameters(t_signal, original_signal, initial_params=None):
     ------
     ValueError
         If input signals are invalid or initial parameters are out of bounds.
-    TypeError
-        If inputs are not array-like or contain non-numeric values.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> t = np.linspace(0, 1000, 1000)
-    >>> signal = np.random.normal(0, 1, 1000)
-    >>> result = optimize_parameters(t, signal)
-    >>> print(result.best_values)
-    {'n_pulses': ..., 'noise_power': ..., 'pulse_duration': ..., 'window_size': 5000, 'stats_fraction': 0.2}
     """
-    # Input validation
-    t_signal = np.asarray(t_signal, dtype=float)
-    original_signal = np.asarray(original_signal, dtype=float)
-    if t_signal.shape != original_signal.shape:
-        raise ValueError("t_signal and original_signal must have the same shape")
-    if np.any(np.isnan(t_signal)) or np.any(np.isnan(original_signal)):
+    if 'time' not in t_signal_df.columns or 'counts' not in signal_df.columns:
+        raise ValueError("t_signal_df must have 'time' column and signal_df must have 'counts' column")
+    
+    t_signal = t_signal_df['time'].to_numpy()
+    signal = signal_df['counts'].to_numpy()
+    
+    if t_signal.shape != signal.shape:
+        raise ValueError("t_signal and signal must have the same shape")
+    if np.any(np.isnan(t_signal)) or np.any(np.isnan(signal)):
         raise ValueError("Input signals must not contain NaN values")
 
     if initial_params is None:
         initial_params = {'n_pulses': 5, 'noise_power': 0.05, 'pulse_duration': 200}
     
-    # Validate initial parameters
     if not (1 <= initial_params['n_pulses'] <= 20):
         raise ValueError("Initial n_pulses must be between 1 and 20")
     if not (0.001 <= initial_params['noise_power'] <= 1.0):
@@ -182,5 +153,6 @@ def optimize_parameters(t_signal, original_signal, initial_params=None):
     model.set_param_hint('window_size', value=5000, vary=False)
     model.set_param_hint('stats_fraction', value=0.2, vary=False)
     
-    result = model.fit(original_signal * 0.2, x=original_signal, method='leastsq')
+    scaled_signal_df = pd.DataFrame({'counts': signal * 0.2})
+    result = model.fit(scaled_signal_df['counts'], signal_df=signal_df, method='leastsq')
     return result

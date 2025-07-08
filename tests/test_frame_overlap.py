@@ -15,7 +15,7 @@ except ImportError as e:
 
 class TestFrameOverlap(unittest.TestCase):
     def setUp(self):
-        """Set up mock data and temporary files for tests."""
+        """Set up mock DataFrames and temporary files for tests."""
         try:
             import numpy
             import pandas
@@ -25,14 +25,20 @@ class TestFrameOverlap(unittest.TestCase):
         except ImportError as e:
             self.fail(f"Required dependency missing: {str(e)}. Please install numpy, pandas, scipy, matplotlib, and lmfit.")
 
-        # Mock signal data (length 1000 to match or exceed kernel length)
-        self.t_signal = np.linspace(0, 1000, 1000)
-        self.signal = np.random.normal(100, 10, 1000)
-        self.errors = np.sqrt(self.signal)
-        self.stacks = np.arange(1, 1001)
+        # Mock signal DataFrame
+        signal_length = 1000
+        self.t_signal_df = pd.DataFrame({
+            'time': np.linspace(0, 1000, signal_length)
+        })
+        self.signal_df = pd.DataFrame({
+            'counts': np.random.normal(100, 10, signal_length),
+            'errors': np.sqrt(np.random.normal(100, 10, signal_length)),
+            'stack': np.arange(1, signal_length + 1)
+        })
+        self.signal_df['time'] = self.t_signal_df['time']
         
-        # Mock kernel data
-        self.t_kernel, self.kernel = generate_kernel(n_pulses=3, window_size=1000, bin_width=10, pulse_duration=100)
+        # Mock kernel DataFrame
+        self.kernel_df = generate_kernel(n_pulses=3, window_size=1000, bin_width=10, pulse_duration=100)
         
         # Create temporary CSV file for ToF data
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -52,11 +58,12 @@ class TestFrameOverlap(unittest.TestCase):
     # Tests for analysis.py
     def test_generate_kernel_valid(self):
         """Test generate_kernel with valid inputs."""
-        t_kernel, kernel = generate_kernel(n_pulses=3, window_size=1000, bin_width=10, pulse_duration=100)
-        self.assertEqual(len(t_kernel), len(kernel))
-        self.assertAlmostEqual(np.sum(kernel), 3 * 10, places=5)  # 3 pulses, each 100/10 bins, height 1.0
-        self.assertTrue(np.all(kernel >= 0))
-        self.assertTrue(np.all(t_kernel >= 0))
+        kernel_df = generate_kernel(n_pulses=3, window_size=1000, bin_width=10, pulse_duration=100)
+        self.assertEqual(len(kernel_df), 1000 // 10)
+        self.assertAlmostEqual(kernel_df['kernel_value'].sum(), 3 * 10, places=5)  # 3 pulses, each 100/10 bins, height 1.0
+        self.assertTrue(np.all(kernel_df['kernel_value'] >= 0))
+        self.assertTrue(np.all(kernel_df['kernel_time'] >= 0))
+        self.assertEqual(list(kernel_df.columns), ['kernel_time', 'kernel_value'])
 
     def test_generate_kernel_insufficient_space(self):
         """Test generate_kernel raises error for insufficient window size."""
@@ -75,52 +82,66 @@ class TestFrameOverlap(unittest.TestCase):
 
     def test_wiener_deconvolution_valid(self):
         """Test wiener_deconvolution with valid inputs."""
-        observed = np.random.normal(0, 1, 1000)
-        kernel = np.ones(50) / 50
-        reconstructed = wiener_deconvolution(observed, kernel, noise_power=0.01)
-        self.assertEqual(len(reconstructed), len(observed))
-        self.assertTrue(np.all(np.isfinite(reconstructed)))
+        observed_df = pd.DataFrame({'counts': np.random.normal(0, 1, 1000)})
+        kernel_df = pd.DataFrame({
+            'kernel_value': np.ones(50) / 50,
+            'kernel_time': np.linspace(0, 500, 50)
+        })
+        reconstructed_df = wiener_deconvolution(observed_df, kernel_df, noise_power=0.01)
+        self.assertEqual(len(reconstructed_df), len(observed_df))
+        self.assertTrue(np.all(np.isfinite(reconstructed_df['reconstructed'])))
+        self.assertEqual(list(reconstructed_df.columns), ['reconstructed'])
 
     def test_wiener_deconvolution_invalid(self):
         """Test wiener_deconvolution raises error for invalid inputs."""
-        observed = np.random.normal(0, 1, 100)
-        kernel = np.ones(200)
+        observed_df = pd.DataFrame({'counts': np.random.normal(0, 1, 100)})
+        kernel_df = pd.DataFrame({
+            'kernel_value': np.ones(200),
+            'kernel_time': np.linspace(0, 2000, 200)
+        })
         with self.assertRaises(ValueError) as cm:
-            wiener_deconvolution(observed, kernel)
+            wiener_deconvolution(observed_df, kernel_df)
         self.assertIn("Observed signal must be at least as long as the kernel", str(cm.exception))
         with self.assertRaises(ValueError) as cm:
-            wiener_deconvolution(observed, np.ones(50), noise_power=0)
+            wiener_deconvolution(observed_df, kernel_df[:50], noise_power=0)
         self.assertIn("noise_power must be positive", str(cm.exception))
 
     def test_apply_filter_valid(self):
         """Test apply_filter with valid inputs."""
-        signal = np.random.normal(0, 1, 1000)
-        kernel = np.ones(50) / 50
-        observed, reconstructed = apply_filter(signal, kernel, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
-        self.assertEqual(len(observed), len(signal))
-        self.assertEqual(len(reconstructed), len(signal))
-        self.assertTrue(np.all(observed >= 1))  # Clipped to 1 in apply_filter
-        self.assertTrue(np.all(np.isfinite(reconstructed)))
+        signal_df = pd.DataFrame({'counts': np.random.normal(0, 1, 1000)})
+        kernel_df = pd.DataFrame({
+            'kernel_value': np.ones(50) / 50,
+            'kernel_time': np.linspace(0, 500, 50)
+        })
+        observed_df, reconstructed_df = apply_filter(signal_df, kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
+        self.assertEqual(len(observed_df), len(signal_df))
+        self.assertEqual(len(reconstructed_df), len(signal_df))
+        self.assertTrue(np.all(observed_df['observed'] >= 1))
+        self.assertTrue(np.all(np.isfinite(reconstructed_df['reconstructed'])))
+        self.assertEqual(list(observed_df.columns), ['observed'])
+        self.assertEqual(list(reconstructed_df.columns), ['reconstructed'])
 
     def test_apply_filter_invalid(self):
         """Test apply_filter raises error for invalid filter type."""
-        signal = np.random.normal(0, 1, 1000)
-        kernel = np.ones(50)
+        signal_df = pd.DataFrame({'counts': np.random.normal(0, 1, 1000)})
+        kernel_df = pd.DataFrame({
+            'kernel_value': np.ones(50),
+            'kernel_time': np.linspace(0, 500, 50)
+        })
         with self.assertRaises(ValueError) as cm:
-            apply_filter(signal, kernel, filter_type='invalid')
+            apply_filter(signal_df, kernel_df, filter_type='invalid')
         self.assertIn("Filter type 'invalid' not supported", str(cm.exception))
 
     # Tests for data.py
     def test_read_tof_data_valid(self):
         """Test read_tof_data with a valid CSV file."""
-        t_signal, signal, errors, stacks = read_tof_data(self.temp_file, threshold=2)
-        self.assertEqual(len(t_signal), 4)  # Threshold filters out stack=1
-        self.assertEqual(len(signal), 4)
-        self.assertEqual(len(errors), 4)
-        self.assertEqual(len(stacks), 4)
-        np.testing.assert_array_equal(t_signal, (np.array([2, 3, 4, 5]) - 1) * 10)
-        np.testing.assert_array_equal(signal, [200, 300, 400, 500])
-        np.testing.assert_array_equal(errors, [20, 30, 40, 50])
+        signal_df = read_tof_data(self.temp_file, threshold=2)
+        self.assertEqual(len(signal_df), 4)  # Threshold filters out stack=1
+        self.assertEqual(list(signal_df.columns), ['time', 'counts', 'errors', 'stack'])
+        np.testing.assert_array_equal(signal_df['time'], (np.array([2, 3, 4, 5]) - 1) * 10)
+        np.testing.assert_array_equal(signal_df['counts'], [200, 300, 400, 500])
+        np.testing.assert_array_equal(signal_df['errors'], [20, 30, 40, 50])
+        np.testing.assert_array_equal(signal_df['stack'], [2, 3, 4, 5])
 
     def test_read_tof_data_file_not_found(self):
         """Test read_tof_data raises error for missing file."""
@@ -136,28 +157,30 @@ class TestFrameOverlap(unittest.TestCase):
 
     def test_prepare_full_frame_valid(self):
         """Test prepare_full_frame with valid inputs."""
-        all_stacks, full_signal, full_errors = prepare_full_frame(self.t_signal, self.signal, self.errors, self.stacks, max_stack=1000)
-        self.assertEqual(len(all_stacks), 1000)
-        self.assertEqual(len(full_signal), 1000)
-        self.assertEqual(len(full_errors), 1000)
-        np.testing.assert_array_almost_equal(full_signal[self.stacks - 1], self.signal)
-        np.testing.assert_array_almost_equal(full_errors[self.stacks - 1], self.errors)
+        full_df = prepare_full_frame(self.signal_df, max_stack=1000)
+        self.assertEqual(len(full_df), 1000)
+        self.assertEqual(list(full_df.columns), ['stack', 'counts', 'errors'])
+        np.testing.assert_array_almost_equal(full_df['counts'][self.signal_df['stack'] - 1], self.signal_df['counts'])
+        np.testing.assert_array_almost_equal(full_df['errors'][self.signal_df['stack'] - 1], self.signal_df['errors'])
+        self.assertTrue(np.all(full_df['stack'] == np.arange(1, 1001)))
 
     def test_prepare_full_frame_invalid(self):
         """Test prepare_full_frame raises error for invalid inputs."""
+        invalid_df = self.signal_df.drop(columns=['counts'])
         with self.assertRaises(ValueError) as cm:
-            prepare_full_frame(self.t_signal, self.signal[:-1], self.errors, self.stacks)
-        self.assertIn("All input arrays must have the same length", str(cm.exception))
+            prepare_full_frame(invalid_df, max_stack=1000)
+        self.assertIn("signal_df must contain columns", str(cm.exception))
         with self.assertRaises(ValueError) as cm:
-            prepare_full_frame(self.t_signal, self.signal, self.errors, self.stacks, max_stack=0)
+            prepare_full_frame(self.signal_df, max_stack=0)
         self.assertIn("max_stack must be positive", str(cm.exception))
 
     # Tests for optimization.py
     def test_chi2_analysis_valid(self):
         """Test chi2_analysis with valid inputs."""
-        scaled = self.signal * 0.2
-        reconstructed = scaled * 1.1
-        chi2, chi2_per_dof = chi2_analysis(scaled, reconstructed, self.errors)
+        scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
+        reconstructed_df = pd.DataFrame({'reconstructed': scaled_df['counts'] * 1.1})
+        errors_df = pd.DataFrame({'errors': self.signal_df['errors']})
+        chi2, chi2_per_dof = chi2_analysis(scaled_df, reconstructed_df, errors_df)
         self.assertGreater(chi2, 0)
         self.assertGreater(chi2_per_dof, 0)
         self.assertIsInstance(chi2, float)
@@ -165,33 +188,35 @@ class TestFrameOverlap(unittest.TestCase):
 
     def test_chi2_analysis_invalid(self):
         """Test chi2_analysis raises error for invalid inputs."""
-        scaled = self.signal * 0.2
-        reconstructed = scaled * 1.1
+        scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
+        reconstructed_df = pd.DataFrame({'reconstructed': scaled_df['counts'] * 1.1})
+        errors_df = pd.DataFrame({'errors': self.signal_df['errors']})
         with self.assertRaises(ValueError) as cm:
-            chi2_analysis(scaled, reconstructed[:-1], self.errors)
+            chi2_analysis(scaled_df.iloc[:-1], reconstructed_df, errors_df)
         self.assertIn("All input arrays must have the same shape", str(cm.exception))
         with self.assertRaises(ValueError) as cm:
-            chi2_analysis(scaled, reconstructed, np.zeros_like(self.errors))
+            chi2_analysis(scaled_df, reconstructed_df, pd.DataFrame({'errors': np.zeros_like(self.signal_df['errors'])}))
         self.assertIn("Errors must be positive", str(cm.exception))
 
     def test_deconvolution_model_valid(self):
         """Test deconvolution_model with valid inputs."""
-        reconstructed = deconvolution_model(self.signal, n_pulses=3, noise_power=0.01, pulse_duration=100)
-        self.assertEqual(len(reconstructed), len(self.signal))
-        self.assertTrue(np.all(np.isfinite(reconstructed)))
+        reconstructed_df = deconvolution_model(self.signal_df, n_pulses=3, noise_power=0.01, pulse_duration=100)
+        self.assertEqual(len(reconstructed_df), len(self.signal_df))
+        self.assertTrue(np.all(np.isfinite(reconstructed_df['reconstructed'])))
+        self.assertEqual(list(reconstructed_df.columns), ['reconstructed'])
 
     def test_deconvolution_model_invalid(self):
         """Test deconvolution_model raises error for invalid inputs."""
         with self.assertRaises(ValueError) as cm:
-            deconvolution_model(self.signal, n_pulses=0, noise_power=0.01, pulse_duration=100)
+            deconvolution_model(self.signal_df, n_pulses=0, noise_power=0.01, pulse_duration=100)
         self.assertIn("n_pulses must be a positive integer", str(cm.exception))
         with self.assertRaises(ValueError) as cm:
-            deconvolution_model(self.signal, n_pulses=3, noise_power=0, pulse_duration=100)
+            deconvolution_model(self.signal_df, n_pulses=3, noise_power=0, pulse_duration=100)
         self.assertIn("noise_power must be positive", str(cm.exception))
 
     def test_optimize_parameters_valid(self):
         """Test optimize_parameters with valid inputs."""
-        result = optimize_parameters(self.t_signal, self.signal, initial_params={'n_pulses': 3, 'noise_power': 0.05, 'pulse_duration': 100})
+        result = optimize_parameters(self.t_signal_df, self.signal_df, initial_params={'n_pulses': 3, 'noise_power': 0.05, 'pulse_duration': 100})
         self.assertTrue(hasattr(result, 'best_values'))
         self.assertIn('n_pulses', result.best_values)
         self.assertIn('noise_power', result.best_values)
@@ -200,34 +225,34 @@ class TestFrameOverlap(unittest.TestCase):
     def test_optimize_parameters_invalid(self):
         """Test optimize_parameters raises error for invalid inputs."""
         with self.assertRaises(ValueError) as cm:
-            optimize_parameters(self.t_signal, self.signal, initial_params={'n_pulses': 0, 'noise_power': 0.05, 'pulse_duration': 100})
+            optimize_parameters(self.t_signal_df, self.signal_df, initial_params={'n_pulses': 0, 'noise_power': 0.05, 'pulse_duration': 100})
         self.assertIn("Initial n_pulses must be between 1 and 20", str(cm.exception))
 
     # Tests for visualization.py
     def test_plot_analysis_valid(self):
         """Test plot_analysis runs without errors."""
-        scaled = self.signal * 0.2
-        observed = poisson.rvs(np.clip(scaled, 0, None))
-        reconstructed = wiener_deconvolution(observed, self.kernel, noise_power=0.01)
-        residuals = scaled - reconstructed
-        chi2, chi2_per_dof = chi2_analysis(scaled, reconstructed, self.errors)
+        scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
+        observed_df = pd.DataFrame({'observed': poisson.rvs(np.clip(scaled_df['counts'].to_numpy(), 0, None))})
+        reconstructed_df = wiener_deconvolution(observed_df, self.kernel_df, noise_power=0.01)
+        residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - reconstructed_df['reconstructed']})
+        chi2, chi2_per_dof = chi2_analysis(scaled_df, reconstructed_df, pd.DataFrame({'errors': self.signal_df['errors']}))
         
         try:
-            plot_analysis(self.t_signal, self.signal, scaled, self.t_kernel, self.kernel, observed, reconstructed, residuals, chi2_per_dof)
+            plot_analysis(self.t_signal_df, self.signal_df, scaled_df, self.kernel_df, observed_df, reconstructed_df, residuals_df, chi2_per_dof)
         except Exception as e:
             self.fail(f"plot_analysis raised {type(e).__name__}: {str(e)}")
 
     def test_plot_analysis_invalid(self):
         """Test plot_analysis raises error for invalid inputs."""
-        scaled = self.signal * 0.2
-        observed = poisson.rvs(np.clip(scaled, 0, None))
-        reconstructed = wiener_deconvolution(observed, self.kernel, noise_power=0.01)
-        residuals = scaled - reconstructed
-        chi2, chi2_per_dof = chi2_analysis(scaled, reconstructed, self.errors)
+        scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
+        observed_df = pd.DataFrame({'observed': poisson.rvs(np.clip(scaled_df['counts'].to_numpy(), 0, None))})
+        reconstructed_df = wiener_deconvolution(observed_df, self.kernel_df, noise_power=0.01)
+        residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - reconstructed_df['reconstructed']})
+        chi2, chi2_per_dof = chi2_analysis(scaled_df, reconstructed_df, pd.DataFrame({'errors': self.signal_df['errors']}))
         
         with self.assertRaises(ValueError) as cm:
-            plot_analysis(self.t_signal, self.signal, scaled[:-1], self.t_kernel, self.kernel, observed, reconstructed, residuals, chi2_per_dof)
-        self.assertIn("All signal-related arrays must have the same length", str(cm.exception))
+            plot_analysis(self.t_signal_df, self.signal_df, scaled_df.iloc[:-1], self.kernel_df, observed_df, reconstructed_df, residuals_df, chi2_per_dof)
+        self.assertIn("All signal-related DataFrames must have the same length", str(cm.exception))
 
 if __name__ == '__main__':
     unittest.main()
