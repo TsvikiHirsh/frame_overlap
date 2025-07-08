@@ -1,3 +1,4 @@
 build/*
 src/frame_overlap.egg-info
 notebooks/.ipynb_checkpoints
+tests/__pycache__
