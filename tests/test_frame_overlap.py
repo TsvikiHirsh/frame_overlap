@@ -8,7 +8,7 @@ from scipy.stats import poisson
 try:
     from frame_overlap.analysis import generate_kernel, wiener_deconvolution, apply_filter
     from frame_overlap.data import read_tof_data, prepare_full_frame
-    from frame_overlap.optimization import chi2_analysis, deconvolution_model, optimize_parameters
+    from frame_overlap.optimization import chi2_analysis, deconvolution_model_wrapper, optimize_parameters
     from frame_overlap.visualization import plot_analysis
 except ImportError as e:
     raise ImportError("Failed to import frame_overlap modules. Ensure the package is installed correctly and dependencies (numpy, pandas, scipy, matplotlib, lmfit) are available.") from e
@@ -27,15 +27,16 @@ class TestFrameOverlap(unittest.TestCase):
 
         # Mock signal DataFrame
         signal_length = 1000
+        counts = np.random.normal(100, 10, signal_length)
         self.t_signal_df = pd.DataFrame({
             'time': np.linspace(0, 1000, signal_length)
         })
         self.signal_df = pd.DataFrame({
-            'counts': np.random.normal(100, 10, signal_length),
-            'errors': np.sqrt(np.random.normal(100, 10, signal_length)),
+            'time': self.t_signal_df['time'],
+            'counts': counts,
+            'errors': np.sqrt(counts),
             'stack': np.arange(1, signal_length + 1)
         })
-        self.signal_df['time'] = self.t_signal_df['time']
         
         # Mock kernel DataFrame
         self.kernel_df = generate_kernel(n_pulses=3, window_size=1000, bin_width=10, pulse_duration=100)
@@ -116,9 +117,9 @@ class TestFrameOverlap(unittest.TestCase):
         observed_df, reconstructed_df = apply_filter(signal_df, kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
         self.assertEqual(len(observed_df), len(signal_df))
         self.assertEqual(len(reconstructed_df), len(signal_df))
-        self.assertTrue(np.all(observed_df['observed'] >= 1))
+        self.assertTrue(np.all(observed_df['counts'] >= 1))
         self.assertTrue(np.all(np.isfinite(reconstructed_df['reconstructed'])))
-        self.assertEqual(list(observed_df.columns), ['observed'])
+        self.assertEqual(list(observed_df.columns), ['counts'])
         self.assertEqual(list(reconstructed_df.columns), ['reconstructed'])
 
     def test_apply_filter_invalid(self):
@@ -135,8 +136,8 @@ class TestFrameOverlap(unittest.TestCase):
     # Tests for data.py
     def test_read_tof_data_valid(self):
         """Test read_tof_data with a valid CSV file."""
-        signal_df = read_tof_data(self.temp_file, threshold=2)
-        self.assertEqual(len(signal_df), 4)  # Threshold filters out stack=1
+        signal_df = read_tof_data(self.temp_file, threshold=100)
+        self.assertEqual(len(signal_df), 4)  # Threshold filters out stack=1 (counts=100)
         self.assertEqual(list(signal_df.columns), ['time', 'counts', 'errors', 'stack'])
         np.testing.assert_array_equal(signal_df['time'], (np.array([2, 3, 4, 5]) - 1) * 10)
         np.testing.assert_array_equal(signal_df['counts'], [200, 300, 400, 500])
@@ -160,8 +161,10 @@ class TestFrameOverlap(unittest.TestCase):
         full_df = prepare_full_frame(self.signal_df, max_stack=1000)
         self.assertEqual(len(full_df), 1000)
         self.assertEqual(list(full_df.columns), ['stack', 'counts', 'errors'])
-        np.testing.assert_array_almost_equal(full_df['counts'][self.signal_df['stack'] - 1], self.signal_df['counts'])
-        np.testing.assert_array_almost_equal(full_df['errors'][self.signal_df['stack'] - 1], self.signal_df['errors'])
+        np.testing.assert_array_almost_equal(full_df.loc[full_df['stack'].isin(self.signal_df['stack']), 'counts'],
+                                            self.signal_df['counts'])
+        np.testing.assert_array_almost_equal(full_df.loc[full_df['stack'].isin(self.signal_df['stack']), 'errors'],
+                                            self.signal_df['errors'])
         self.assertTrue(np.all(full_df['stack'] == np.arange(1, 1001)))
 
     def test_prepare_full_frame_invalid(self):
@@ -199,19 +202,20 @@ class TestFrameOverlap(unittest.TestCase):
         self.assertIn("Errors must be positive", str(cm.exception))
 
     def test_deconvolution_model_valid(self):
-        """Test deconvolution_model with valid inputs."""
-        reconstructed_df = deconvolution_model(self.signal_df, n_pulses=3, noise_power=0.01, pulse_duration=100)
-        self.assertEqual(len(reconstructed_df), len(self.signal_df))
-        self.assertTrue(np.all(np.isfinite(reconstructed_df['reconstructed'])))
-        self.assertEqual(list(reconstructed_df.columns), ['reconstructed'])
+        """Test deconvolution_model_wrapper with valid inputs."""
+        x = np.arange(len(self.signal_df))
+        reconstructed = deconvolution_model_wrapper(x, n_pulses=3, noise_power=0.01, pulse_duration=100, window_size=1000, stats_fraction=0.2, signal_df=self.signal_df)
+        self.assertEqual(len(reconstructed), len(self.signal_df))
+        self.assertTrue(np.all(np.isfinite(reconstructed)))
 
     def test_deconvolution_model_invalid(self):
-        """Test deconvolution_model raises error for invalid inputs."""
+        """Test deconvolution_model_wrapper raises error for invalid inputs."""
+        x = np.arange(len(self.signal_df))
         with self.assertRaises(ValueError) as cm:
-            deconvolution_model(self.signal_df, n_pulses=0, noise_power=0.01, pulse_duration=100)
+            deconvolution_model_wrapper(x, n_pulses=0, noise_power=0.01, pulse_duration=100, window_size=1000, stats_fraction=0.2, signal_df=self.signal_df)
         self.assertIn("n_pulses must be a positive integer", str(cm.exception))
         with self.assertRaises(ValueError) as cm:
-            deconvolution_model(self.signal_df, n_pulses=3, noise_power=0, pulse_duration=100)
+            deconvolution_model_wrapper(x, n_pulses=3, noise_power=0, pulse_duration=100, window_size=1000, stats_fraction=0.2, signal_df=self.signal_df)
         self.assertIn("noise_power must be positive", str(cm.exception))
 
     def test_optimize_parameters_valid(self):
@@ -232,8 +236,7 @@ class TestFrameOverlap(unittest.TestCase):
     def test_plot_analysis_valid(self):
         """Test plot_analysis runs without errors."""
         scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
-        observed_df = pd.DataFrame({'observed': poisson.rvs(np.clip(scaled_df['counts'].to_numpy(), 0, None))})
-        reconstructed_df = wiener_deconvolution(observed_df, self.kernel_df, noise_power=0.01)
+        observed_df, reconstructed_df = apply_filter(self.signal_df, self.kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
         residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - reconstructed_df['reconstructed']})
         chi2, chi2_per_dof = chi2_analysis(scaled_df, reconstructed_df, pd.DataFrame({'errors': self.signal_df['errors']}))
         
@@ -245,8 +248,7 @@ class TestFrameOverlap(unittest.TestCase):
     def test_plot_analysis_invalid(self):
         """Test plot_analysis raises error for invalid inputs."""
         scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
-        observed_df = pd.DataFrame({'observed': poisson.rvs(np.clip(scaled_df['counts'].to_numpy(), 0, None))})
-        reconstructed_df = wiener_deconvolution(observed_df, self.kernel_df, noise_power=0.01)
+        observed_df, reconstructed_df = apply_filter(self.signal_df, self.kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
         residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - reconstructed_df['reconstructed']})
         chi2, chi2_per_dof = chi2_analysis(scaled_df, reconstructed_df, pd.DataFrame({'errors': self.signal_df['errors']}))
         

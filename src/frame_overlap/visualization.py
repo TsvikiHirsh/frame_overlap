@@ -1,28 +1,35 @@
-import pandas as pd
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 
 def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, reconstructed_df, residuals_df, chi2_per_dof):
     """
-    Plot the analysis results including original signal, kernel, observed, reconstructed, and residuals.
+    Plot the analysis results including original signal, scaled signal, kernel, observed signal,
+    reconstructed signal, and residuals.
 
     Parameters
     ----------
     t_signal_df : pandas.DataFrame
-        DataFrame with column 'time' for the x-axis.
+        DataFrame with column 'time' containing the time array.
     signal_df : pandas.DataFrame
-        DataFrame with column 'counts' for the original signal.
+        DataFrame with column 'counts' containing the original signal.
     scaled_df : pandas.DataFrame
-        DataFrame with column 'counts' for the scaled original signal.
+        DataFrame with column 'counts' containing the scaled signal.
     kernel_df : pandas.DataFrame
-        DataFrame with columns 'kernel_time' and 'kernel_value' for the kernel.
+        DataFrame with columns 'kernel_time' and 'kernel_value' containing the kernel.
     observed_df : pandas.DataFrame
-        DataFrame with column 'observed' for the observed signal with noise.
+        DataFrame with column 'counts' containing the observed signal.
     reconstructed_df : pandas.DataFrame
-        DataFrame with column 'reconstructed' for the reconstructed signal.
+        DataFrame with column 'reconstructed' containing the reconstructed signal.
     residuals_df : pandas.DataFrame
-        DataFrame with column 'residuals' for the residuals (scaled - reconstructed).
+        DataFrame with column 'residuals' containing the residuals.
     chi2_per_dof : float
-        Reduced chi-squared statistic for the fit.
+        Reduced chi-squared value for the fit.
+
+    Returns
+    -------
+    None
+        Displays a matplotlib plot with six subplots.
 
     Raises
     ------
@@ -34,7 +41,7 @@ def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, rec
         'signal_df': 'counts',
         'scaled_df': 'counts',
         'kernel_df': ['kernel_time', 'kernel_value'],
-        'observed_df': 'observed',
+        'observed_df': 'counts',
         'reconstructed_df': 'reconstructed',
         'residuals_df': 'residuals'
     }
@@ -51,35 +58,47 @@ def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, rec
     signal_length = len(t_signal_df)
     if not all(len(df) == signal_length for df in [signal_df, scaled_df, observed_df, reconstructed_df, residuals_df]):
         raise ValueError("All signal-related DataFrames must have the same length")
-
-    fig, (ax1, ax2, ax3, ax4) = plt.subplots(4, 1, figsize=(10, 12), sharex=True)
+    if len(kernel_df) > signal_length:
+        raise ValueError("Kernel DataFrame length must not exceed signal length")
     
-    # Plot original and scaled signal
-    signal_df.plot(x=t_signal_df['time'], y='counts', ax=ax1, label='Original Signal', color='blue')
-    scaled_df.plot(x=t_signal_df['time'], y='counts', ax=ax1, label='Scaled Signal', color='green')
-    ax1.set_ylabel('Counts')
-    ax1.legend()
-    ax1.set_title('Original and Scaled Signal')
+    fig, axes = plt.subplots(6, 1, figsize=(10, 12), sharex=True)
+    
+    # Plot original signal
+    axes[0].plot(t_signal_df['time'], signal_df['counts'], label='Original Signal')
+    axes[0].set_ylabel('Counts')
+    axes[0].legend()
+    axes[0].grid(True)
+    
+    # Plot scaled signal
+    axes[1].plot(t_signal_df['time'], scaled_df['counts'], label='Scaled Signal', color='orange')
+    axes[1].set_ylabel('Counts')
+    axes[1].legend()
+    axes[1].grid(True)
     
     # Plot kernel
-    kernel_df.plot(x='kernel_time', y='kernel_value', ax=ax2, label='Kernel', color='red')
-    ax2.set_ylabel('Kernel Value')
-    ax2.legend()
-    ax2.set_title('Kernel')
+    axes[2].plot(kernel_df['kernel_time'], kernel_df['kernel_value'], label='Kernel', color='green')
+    axes[2].set_ylabel('Kernel Value')
+    axes[2].legend()
+    axes[2].grid(True)
     
-    # Plot observed and reconstructed signals
-    observed_df.plot(x=t_signal_df['time'], y='observed', ax=ax3, label='Observed (Poisson)', color='orange')
-    reconstructed_df.plot(x=t_signal_df['time'], y='reconstructed', ax=ax3, label='Reconstructed', color='purple')
-    ax3.set_ylabel('Counts')
-    ax3.legend()
-    ax3.set_title(f'Reconstructed Signal (Reduced Chi2: {chi2_per_dof:.2f})')
+    # Plot observed signal
+    axes[3].plot(t_signal_df['time'], observed_df['counts'], label='Observed Signal', color='red')
+    axes[3].set_ylabel('Counts')
+    axes[3].legend()
+    axes[3].grid(True)
+    
+    # Plot reconstructed signal
+    axes[4].plot(t_signal_df['time'], reconstructed_df['reconstructed'], label='Reconstructed Signal', color='purple')
+    axes[4].set_ylabel('Counts')
+    axes[4].legend()
+    axes[4].grid(True)
     
     # Plot residuals
-    residuals_df.plot(x=t_signal_df['time'], y='residuals', ax=ax4, label='Residuals', color='black')
-    ax4.set_ylabel('Residuals')
-    ax4.set_xlabel('Time')
-    ax4.legend()
-    ax4.set_title('Residuals')
+    axes[5].plot(t_signal_df['time'], residuals_df['residuals'], label=f'Residuals (χ²/dof = {chi2_per_dof:.2f})', color='black')
+    axes[5].set_xlabel('Time')
+    axes[5].set_ylabel('Residuals')
+    axes[5].legend()
+    axes[5].grid(True)
     
     plt.tight_layout()
     plt.show()

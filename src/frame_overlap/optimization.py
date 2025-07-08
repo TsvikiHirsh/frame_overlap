@@ -47,14 +47,31 @@ def chi2_analysis(scaled_original_df, reconstructed_df, errors_df):
     chi2_per_dof = chi2 / len(scaled_original)
     return chi2, chi2_per_dof
 
-def deconvolution_model(signal_df, n_pulses, noise_power, pulse_duration, window_size=5000, stats_fraction=0.2):
+def deconvolution_model_wrapper(x, n_pulses, noise_power, pulse_duration, window_size, stats_fraction, signal_df):
+    """
+    Wrapper for deconvolution_model to ensure signal_df is a DataFrame.
+
+    Parameters
+    ----------
+    Same as deconvolution_model, with signal_df enforced as a DataFrame.
+
+    Returns
+    -------
+    numpy.ndarray
+        Array containing the reconstructed signal.
+    """
+    if not isinstance(signal_df, pd.DataFrame):
+        signal_df = pd.DataFrame({'counts': signal_df})
+    return deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size, stats_fraction, signal_df)
+
+def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=5000, stats_fraction=0.2, signal_df=None):
     """
     Apply Wiener deconvolution to model a signal with specified parameters.
 
     Parameters
     ----------
-    signal_df : pandas.DataFrame
-        DataFrame with column 'counts' containing the input signal.
+    x : array-like
+        Independent variable for lmfit compatibility (not used directly).
     n_pulses : int
         Number of pulses in the kernel.
     noise_power : float
@@ -65,21 +82,23 @@ def deconvolution_model(signal_df, n_pulses, noise_power, pulse_duration, window
         Size of the kernel window (default: 5000).
     stats_fraction : float, optional
         Scaling factor for Poisson noise (default: 0.2).
+    signal_df : pandas.DataFrame, optional
+        DataFrame with column 'counts' containing the input signal.
 
     Returns
     -------
-    pandas.DataFrame
-        DataFrame with column 'reconstructed' containing the reconstructed signal.
+    numpy.ndarray
+        Array containing the reconstructed signal.
 
     Raises
     ------
     ValueError
-        If input parameters are invalid (e.g., negative values, non-positive n_pulses).
+        If input parameters are invalid or signal_df is not provided correctly.
     """
     from .analysis import generate_kernel, wiener_deconvolution
 
-    if 'counts' not in signal_df.columns:
-        raise ValueError("signal_df must have 'counts' column")
+    if signal_df is None or not isinstance(signal_df, pd.DataFrame) or 'counts' not in signal_df.columns:
+        raise ValueError("signal_df must be a pandas DataFrame with 'counts' column")
     
     n_pulses = int(n_pulses)  # Cast to integer to handle lmfit float inputs
     if n_pulses < 1:
@@ -99,7 +118,7 @@ def deconvolution_model(signal_df, n_pulses, noise_power, pulse_duration, window
     observed_poisson = poisson.rvs(np.clip(scaled_observed, 0, None))
     observed_df = pd.DataFrame({'counts': observed_poisson})
     reconstructed_df = wiener_deconvolution(observed_df, kernel_df, noise_power=noise_power)
-    return reconstructed_df
+    return reconstructed_df['reconstructed'].to_numpy()  # Return NumPy array for lmfit compatibility
 
 def optimize_parameters(t_signal_df, signal_df, initial_params=None):
     """
@@ -125,8 +144,10 @@ def optimize_parameters(t_signal_df, signal_df, initial_params=None):
     ValueError
         If input signals are invalid or initial parameters are out of bounds.
     """
-    if 'time' not in t_signal_df.columns or 'counts' not in signal_df.columns:
-        raise ValueError("t_signal_df must have 'time' column and signal_df must have 'counts' column")
+    if not isinstance(t_signal_df, pd.DataFrame) or 'time' not in t_signal_df.columns:
+        raise ValueError("t_signal_df must be a pandas DataFrame with 'time' column")
+    if not isinstance(signal_df, pd.DataFrame) or 'counts' not in signal_df.columns:
+        raise ValueError("signal_df must be a pandas DataFrame with 'counts' column")
     
     t_signal = t_signal_df['time'].to_numpy()
     signal = signal_df['counts'].to_numpy()
@@ -146,7 +167,12 @@ def optimize_parameters(t_signal_df, signal_df, initial_params=None):
     if not (10 <= initial_params['pulse_duration'] <= 1000):
         raise ValueError("Initial pulse_duration must be between 10 and 1000")
 
-    model = Model(deconvolution_model)
+    # Create a partial function that binds signal_df to the model
+    def model_func(x, n_pulses, noise_power, pulse_duration, window_size, stats_fraction):
+        return deconvolution_model_wrapper(x, n_pulses, noise_power, pulse_duration, 
+                                         window_size, stats_fraction, signal_df.copy())
+    
+    model = Model(model_func, nan_policy='omit')
     model.set_param_hint('n_pulses', value=initial_params['n_pulses'], min=1, max=20, vary=True)
     model.set_param_hint('noise_power', value=initial_params['noise_power'], min=0.001, max=1.0, vary=True)
     model.set_param_hint('pulse_duration', value=initial_params['pulse_duration'], min=10, max=1000, vary=True)
@@ -154,5 +180,10 @@ def optimize_parameters(t_signal_df, signal_df, initial_params=None):
     model.set_param_hint('stats_fraction', value=0.2, vary=False)
     
     scaled_signal_df = pd.DataFrame({'counts': signal * 0.2})
-    result = model.fit(scaled_signal_df['counts'], signal_df=signal_df, method='leastsq')
+    x = np.arange(len(scaled_signal_df))  # Dummy independent variable for lmfit
+    result = model.fit(
+        scaled_signal_df['counts'].to_numpy(),
+        x=x,
+        method='leastsq'
+    )
     return result

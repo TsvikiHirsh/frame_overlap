@@ -37,7 +37,7 @@ def read_tof_data(file_path, threshold=0):
         raise ValueError(f"CSV file must contain columns: {required_columns}")
     
     # Filter by threshold
-    df = df[df['counts'] >= threshold].copy()
+    df = df[df['counts'] > threshold].copy()  # Changed to > to exclude counts=threshold
     
     # Calculate time (assuming stack numbers are 1-based and correspond to 10-unit time intervals)
     df['time'] = (df['stack'] - 1) * 10
@@ -87,11 +87,9 @@ def prepare_full_frame(signal_df, max_stack):
     })
     
     # Merge signal data into full frame
-    full_df = full_df.set_index('stack').combine_first(
-        signal_df[['stack', 'counts', 'errors']].set_index('stack')
-    ).reset_index()
-    
-    # Fill NaN values with 0
-    full_df = full_df.fillna({'counts': 0.0, 'errors': 0.0})
+    signal_subset = signal_df[['stack', 'counts', 'errors']].set_index('stack')
+    full_df = full_df.set_index('stack')
+    full_df.update(signal_subset)
+    full_df = full_df.reset_index()
     
     return full_df[['stack', 'counts', 'errors']]
