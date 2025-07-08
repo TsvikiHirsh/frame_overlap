@@ -61,7 +61,7 @@ class TestFrameOverlap(unittest.TestCase):
         """Test generate_kernel with valid inputs."""
         kernel_df = generate_kernel(n_pulses=3, window_size=1000, bin_width=10, pulse_duration=100)
         self.assertEqual(len(kernel_df), 1000 // 10)
-        self.assertAlmostEqual(kernel_df['kernel_value'].sum(), 3 * 10, places=5)  # 3 pulses, each 100/10 bins, height 1.0
+        self.assertAlmostEqual(kernel_df['kernel_value'].sum(), 1.0, places=5)  # Normalized kernel
         self.assertTrue(np.all(kernel_df['kernel_value'] >= 0))
         self.assertTrue(np.all(kernel_df['kernel_time'] >= 0))
         self.assertEqual(list(kernel_df.columns), ['kernel_time', 'kernel_value'])
@@ -83,7 +83,7 @@ class TestFrameOverlap(unittest.TestCase):
 
     def test_wiener_deconvolution_valid(self):
         """Test wiener_deconvolution with valid inputs."""
-        observed_df = pd.DataFrame({'counts': np.random.normal(0, 1, 1000)})
+        observed_df = pd.DataFrame({'counts': np.random.normal(100, 10, 1000)})
         kernel_df = pd.DataFrame({
             'kernel_value': np.ones(50) / 50,
             'kernel_time': np.linspace(0, 500, 50)
@@ -109,18 +109,16 @@ class TestFrameOverlap(unittest.TestCase):
 
     def test_apply_filter_valid(self):
         """Test apply_filter with valid inputs."""
-        signal_df = pd.DataFrame({'counts': np.random.normal(0, 1, 1000)})
+        signal_df = pd.DataFrame({'counts': np.random.normal(100, 10, 1000)})
         kernel_df = pd.DataFrame({
             'kernel_value': np.ones(50) / 50,
             'kernel_time': np.linspace(0, 500, 50)
         })
-        observed_df, reconstructed_df = apply_filter(signal_df, kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
-        self.assertEqual(len(observed_df), len(signal_df))
-        self.assertEqual(len(reconstructed_df), len(signal_df))
-        self.assertTrue(np.all(observed_df['counts'] >= 1))
-        self.assertTrue(np.all(np.isfinite(reconstructed_df['reconstructed'])))
-        self.assertEqual(list(observed_df.columns), ['counts'])
-        self.assertEqual(list(reconstructed_df.columns), ['reconstructed'])
+        result_df = apply_filter(signal_df, kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
+        self.assertEqual(len(result_df), len(signal_df))
+        self.assertTrue(np.all(result_df['counts'] >= 1))
+        self.assertTrue(np.all(np.isfinite(result_df['reconstructed'])))
+        self.assertEqual(list(result_df.columns), ['counts', 'reconstructed'])
 
     def test_apply_filter_invalid(self):
         """Test apply_filter raises error for invalid filter type."""
@@ -225,6 +223,13 @@ class TestFrameOverlap(unittest.TestCase):
         self.assertIn('n_pulses', result.best_values)
         self.assertIn('noise_power', result.best_values)
         self.assertIn('pulse_duration', result.best_values)
+        self.assertFalse(np.any(np.isnan(result.best_fit)))
+        self.assertGreaterEqual(result.best_values['n_pulses'], 1)
+        self.assertLessEqual(result.best_values['n_pulses'], 20)
+        self.assertGreaterEqual(result.best_values['noise_power'], 0.001)
+        self.assertLessEqual(result.best_values['noise_power'], 1.0)
+        self.assertGreaterEqual(result.best_values['pulse_duration'], 10)
+        self.assertLessEqual(result.best_values['pulse_duration'], 1000)
 
     def test_optimize_parameters_invalid(self):
         """Test optimize_parameters raises error for invalid inputs."""
@@ -236,24 +241,24 @@ class TestFrameOverlap(unittest.TestCase):
     def test_plot_analysis_valid(self):
         """Test plot_analysis runs without errors."""
         scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
-        observed_df, reconstructed_df = apply_filter(self.signal_df, self.kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
-        residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - reconstructed_df['reconstructed']})
-        chi2, chi2_per_dof = chi2_analysis(scaled_df, reconstructed_df, pd.DataFrame({'errors': self.signal_df['errors']}))
+        result_df = apply_filter(self.signal_df, self.kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
+        residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - result_df['reconstructed']})
+        chi2, chi2_per_dof = chi2_analysis(scaled_df, result_df, pd.DataFrame({'errors': self.signal_df['errors']}))
         
         try:
-            plot_analysis(self.t_signal_df, self.signal_df, scaled_df, self.kernel_df, observed_df, reconstructed_df, residuals_df, chi2_per_dof)
+            plot_analysis(self.t_signal_df, self.signal_df, scaled_df, self.kernel_df, result_df, residuals_df, chi2_per_dof)
         except Exception as e:
             self.fail(f"plot_analysis raised {type(e).__name__}: {str(e)}")
 
     def test_plot_analysis_invalid(self):
         """Test plot_analysis raises error for invalid inputs."""
         scaled_df = pd.DataFrame({'counts': self.signal_df['counts'] * 0.2})
-        observed_df, reconstructed_df = apply_filter(self.signal_df, self.kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
-        residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - reconstructed_df['reconstructed']})
-        chi2, chi2_per_dof = chi2_analysis(scaled_df, reconstructed_df, pd.DataFrame({'errors': self.signal_df['errors']}))
+        result_df = apply_filter(self.signal_df, self.kernel_df, filter_type='wiener', stats_fraction=0.2, noise_power=0.01)
+        residuals_df = pd.DataFrame({'residuals': scaled_df['counts'] - result_df['reconstructed']})
+        chi2, chi2_per_dof = chi2_analysis(scaled_df, result_df, pd.DataFrame({'errors': self.signal_df['errors']}))
         
         with self.assertRaises(ValueError) as cm:
-            plot_analysis(self.t_signal_df, self.signal_df, scaled_df.iloc[:-1], self.kernel_df, observed_df, reconstructed_df, residuals_df, chi2_per_dof)
+            plot_analysis(self.t_signal_df, self.signal_df, scaled_df.iloc[:-1], self.kernel_df, result_df, residuals_df, chi2_per_dof)
         self.assertIn("All signal-related DataFrames must have the same length", str(cm.exception))
 
 if __name__ == '__main__':

@@ -2,7 +2,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
-def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, reconstructed_df, residuals_df, chi2_per_dof):
+def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, result_df, residuals_df, chi2_per_dof):
     """
     Plot the analysis results including original signal, scaled signal, kernel, observed signal,
     reconstructed signal, and residuals.
@@ -17,10 +17,8 @@ def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, rec
         DataFrame with column 'counts' containing the scaled signal.
     kernel_df : pandas.DataFrame
         DataFrame with columns 'kernel_time' and 'kernel_value' containing the kernel.
-    observed_df : pandas.DataFrame
-        DataFrame with column 'counts' containing the observed signal.
-    reconstructed_df : pandas.DataFrame
-        DataFrame with column 'reconstructed' containing the reconstructed signal.
+    result_df : pandas.DataFrame
+        DataFrame with columns 'counts' (observed signal) and 'reconstructed' (reconstructed signal).
     residuals_df : pandas.DataFrame
         DataFrame with column 'residuals' containing the residuals.
     chi2_per_dof : float
@@ -41,8 +39,7 @@ def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, rec
         'signal_df': 'counts',
         'scaled_df': 'counts',
         'kernel_df': ['kernel_time', 'kernel_value'],
-        'observed_df': 'counts',
-        'reconstructed_df': 'reconstructed',
+        'result_df': ['counts', 'reconstructed'],
         'residuals_df': 'residuals'
     }
     
@@ -56,7 +53,7 @@ def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, rec
                 raise ValueError(f"{df_name} must have column: {cols}")
     
     signal_length = len(t_signal_df)
-    if not all(len(df) == signal_length for df in [signal_df, scaled_df, observed_df, reconstructed_df, residuals_df]):
+    if not all(len(df) == signal_length for df in [signal_df, scaled_df, result_df, residuals_df]):
         raise ValueError("All signal-related DataFrames must have the same length")
     if len(kernel_df) > signal_length:
         raise ValueError("Kernel DataFrame length must not exceed signal length")
@@ -82,13 +79,13 @@ def plot_analysis(t_signal_df, signal_df, scaled_df, kernel_df, observed_df, rec
     axes[2].grid(True)
     
     # Plot observed signal
-    axes[3].plot(t_signal_df['time'], observed_df['counts'], label='Observed Signal', color='red')
+    axes[3].plot(t_signal_df['time'], result_df['counts'], label='Observed Signal', color='red')
     axes[3].set_ylabel('Counts')
     axes[3].legend()
     axes[3].grid(True)
     
     # Plot reconstructed signal
-    axes[4].plot(t_signal_df['time'], reconstructed_df['reconstructed'], label='Reconstructed Signal', color='purple')
+    axes[4].plot(t_signal_df['time'], result_df['reconstructed'], label='Reconstructed Signal', color='purple')
     axes[4].set_ylabel('Counts')
     axes[4].legend()
     axes[4].grid(True)

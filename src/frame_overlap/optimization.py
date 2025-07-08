@@ -62,6 +62,8 @@ def deconvolution_model_wrapper(x, n_pulses, noise_power, pulse_duration, window
     """
     if not isinstance(signal_df, pd.DataFrame):
         signal_df = pd.DataFrame({'counts': signal_df})
+    if 'counts' not in signal_df.columns:
+        raise ValueError("signal_df must have 'counts' column")
     return deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size, stats_fraction, signal_df)
 
 def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=5000, stats_fraction=0.2, signal_df=None):
@@ -117,8 +119,8 @@ def deconvolution_model(x, n_pulses, noise_power, pulse_duration, window_size=50
     scaled_observed = observed * stats_fraction
     observed_poisson = poisson.rvs(np.clip(scaled_observed, 0, None))
     observed_df = pd.DataFrame({'counts': observed_poisson})
-    reconstructed_df = wiener_deconvolution(observed_df, kernel_df, noise_power=noise_power)
-    return reconstructed_df['reconstructed'].to_numpy()  # Return NumPy array for lmfit compatibility
+    result_df = wiener_deconvolution(observed_df, kernel_df, noise_power=noise_power)
+    return result_df['reconstructed'].to_numpy()  # Return NumPy array for lmfit compatibility
 
 def optimize_parameters(t_signal_df, signal_df, initial_params=None):
     """
@@ -167,23 +169,24 @@ def optimize_parameters(t_signal_df, signal_df, initial_params=None):
     if not (10 <= initial_params['pulse_duration'] <= 1000):
         raise ValueError("Initial pulse_duration must be between 10 and 1000")
 
-    # Create a partial function that binds signal_df to the model
-    def model_func(x, n_pulses, noise_power, pulse_duration, window_size, stats_fraction):
-        return deconvolution_model_wrapper(x, n_pulses, noise_power, pulse_duration, 
-                                         window_size, stats_fraction, signal_df.copy())
-    
-    model = Model(model_func, nan_policy='omit')
+    model = Model(deconvolution_model_wrapper, nan_policy='omit')
     model.set_param_hint('n_pulses', value=initial_params['n_pulses'], min=1, max=20, vary=True)
     model.set_param_hint('noise_power', value=initial_params['noise_power'], min=0.001, max=1.0, vary=True)
     model.set_param_hint('pulse_duration', value=initial_params['pulse_duration'], min=10, max=1000, vary=True)
     model.set_param_hint('window_size', value=5000, vary=False)
     model.set_param_hint('stats_fraction', value=0.2, vary=False)
-    
+
     scaled_signal_df = pd.DataFrame({'counts': signal * 0.2})
     x = np.arange(len(scaled_signal_df))  # Dummy independent variable for lmfit
     result = model.fit(
         scaled_signal_df['counts'].to_numpy(),
         x=x,
+        n_pulses=initial_params['n_pulses'],
+        noise_power=initial_params['noise_power'],
+        pulse_duration=initial_params['pulse_duration'],
+        window_size=5000,
+        stats_fraction=0.2,
+        signal_df=signal_df.copy(),  # Pass signal_df directly as a fixed argument
         method='leastsq'
     )
     return result
