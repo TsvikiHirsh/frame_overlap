@@ -284,7 +284,7 @@ class TestDataClass(unittest.TestCase):
         """Test convolution with square response."""
         data = Data(signal_file=self.temp_file)
         original_counts = data.table['counts'].copy()
-        data.convolute_response(pulse_duration=0.2)  # 0.2 ms = 200 µs
+        data.convolute_response(pulse_duration=200)  # 200 µs
         # Check that data has been modified
         self.assertFalse(np.array_equal(original_counts, data.table['counts']))
 
@@ -348,7 +348,7 @@ class TestReconstructClass(unittest.TestCase):
     def test_reconstruct_init(self):
         """Test Reconstruct initialization."""
         data = Data(signal_file=self.temp_file)
-        data.convolute_response(0.2).overlap(kernel=[0, 12, 10])  # 0.2 ms = 200 µs
+        data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
         recon = Reconstruct(data)
         self.assertIsNotNone(recon.data)
         self.assertIsNone(recon.reconstructed_table)
@@ -356,7 +356,7 @@ class TestReconstructClass(unittest.TestCase):
     def test_reconstruct_filter_wiener(self):
         """Test Wiener filtering."""
         data = Data(signal_file=self.temp_file)
-        data.convolute_response(0.2).overlap(kernel=[0, 12, 10])  # 0.2 ms = 200 µs
+        data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
         recon = Reconstruct(data)
         recon.filter(kind='wiener', noise_power=0.01)
         self.assertIsNotNone(recon.reconstructed_table)
@@ -365,7 +365,7 @@ class TestReconstructClass(unittest.TestCase):
     def test_reconstruct_get_statistics(self):
         """Test getting reconstruction statistics."""
         data = Data(signal_file=self.temp_file)
-        data.convolute_response(0.2).overlap(kernel=[0, 12, 10])  # 0.2 ms = 200 µs
+        data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
         recon = Reconstruct(data)
         recon.filter(kind='wiener')
         stats = recon.get_statistics()
@@ -374,7 +374,7 @@ class TestReconstructClass(unittest.TestCase):
     def test_reconstruct_plot_reconstruction(self):
         """Test plotting reconstruction."""
         data = Data(signal_file=self.temp_file)
-        data.convolute_response(0.2).overlap(kernel=[0, 12, 10])  # 0.2 ms = 200 µs
+        data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
         recon = Reconstruct(data)
         recon.filter(kind='wiener')
         try:
@@ -413,7 +413,7 @@ class TestAnalysisClass(unittest.TestCase):
         """Test Analysis initialization with nbragg."""
         try:
             data = Data(signal_file=self.temp_file)
-            data.convolute_response(0.2).overlap(kernel=[0, 12, 10])  # 0.2 ms = 200 µs
+            data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
             recon = Reconstruct(data)
             recon.filter(kind='wiener')
 
@@ -431,7 +431,7 @@ class TestAnalysisClass(unittest.TestCase):
         """Test setting cross section - skip if nbragg not available."""
         try:
             data = Data(signal_file=self.temp_file)
-            data.convolute_response(0.2).overlap(kernel=[0, 12, 10])  # 0.2 ms = 200 µs
+            data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
             recon = Reconstruct(data)
             recon.filter(kind='wiener')
 
@@ -448,7 +448,7 @@ class TestAnalysisClass(unittest.TestCase):
         """Test fitting reconstructed data - skip if nbragg not available."""
         try:
             data = Data(signal_file=self.temp_file)
-            data.convolute_response(0.2).overlap(kernel=[0, 12, 10])  # 0.2 ms = 200 µs
+            data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
             recon = Reconstruct(data)
             recon.filter(kind='wiener')
 

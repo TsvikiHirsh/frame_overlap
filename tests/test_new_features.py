@@ -45,7 +45,7 @@ class TestConvolutionErrorBars(unittest.TestCase):
         data = Data(signal_file=self.temp_file)
 
         # Apply convolution
-        data.convolute_response(pulse_duration=0.2)  # 0.2 ms = 200 µs
+        data.convolute_response(pulse_duration=200)  # 200 µs
 
         # After convolution with constant input, counts should remain ~100
         # Error bars should be sqrt(counts) ≈ 10
@@ -59,14 +59,14 @@ class TestConvolutionErrorBars(unittest.TestCase):
     def test_convolved_data_attribute(self):
         """Test that convolved_data attribute exists and works."""
         data = Data(signal_file=self.temp_file)
-        data.convolute_response(pulse_duration=0.2)
+        data.convolute_response(pulse_duration=200)  # 200 µs
 
         # Check attribute exists
         self.assertIsNotNone(data.convolved_data)
 
 
-class TestTimeUnitsMilliseconds(unittest.TestCase):
-    """Test that time units are now in milliseconds."""
+class TestTimeUnitsInternally(unittest.TestCase):
+    """Test that time units are in microseconds internally, milliseconds in plots."""
 
     def setUp(self):
         """Set up temporary test file."""
@@ -85,12 +85,12 @@ class TestTimeUnitsMilliseconds(unittest.TestCase):
         """Clean up temporary files."""
         self.temp_dir.cleanup()
 
-    def test_time_in_milliseconds(self):
-        """Test that time is loaded in milliseconds."""
+    def test_time_in_microseconds(self):
+        """Test that time is loaded in microseconds internally."""
         data = Data(signal_file=self.temp_file)
 
-        # Stack 1 should be at time 0, stack 2 at 0.01 ms (10 µs), etc.
-        expected_time = np.array([0, 0.01, 0.02, 0.03, 0.04])
+        # Stack 1 should be at time 0, stack 2 at 10 µs, etc.
+        expected_time = np.array([0, 10, 20, 30, 40])
 
         np.testing.assert_array_almost_equal(data.data['time'].values, expected_time, decimal=6)
 
@@ -130,13 +130,13 @@ class TestWraparoundOverlap(unittest.TestCase):
         data = Data(signal_file=self.temp_file)
 
         # Create overlap with total_time shorter than needed
-        # Data spans ~1 ms (100 bins * 0.01 ms)
-        # If we set total_time=0.5 ms with frames that would exceed it, wraparound should occur
+        # Data spans ~1000 µs (100 bins * 10 µs)
+        # If we set total_time=0.5 ms = 500 µs with frames that would exceed it, wraparound should occur
         data.overlap(kernel=[0, 0.3, 0.3], total_time=0.5)
 
         # Check that overlapped data has the expected length
-        # 0.5 ms / 0.01 ms/bin = 50 bins
-        self.assertEqual(len(data.overlapped_data), 51)  # +1 for the endpoint
+        # 500 µs / 10 µs/bin = 50 bins
+        self.assertEqual(len(data.overlapped_data), 50)
 
     def test_kernel_parameter_name(self):
         """Test that 'kernel' parameter name works (renamed from 'seq')."""
@@ -246,7 +246,7 @@ class TestPlottingImprovements(unittest.TestCase):
     def test_plot_show_stages(self):
         """Test plotting with show_stages."""
         data = Data(signal_file=self.signal_file)
-        data.convolute_response(pulse_duration=0.2)
+        data.convolute_response(pulse_duration=200)  # 200 µs
         data.overlap(kernel=[0, 5, 10])
 
         fig = data.plot(kind='signal', show_stages=True)
@@ -319,7 +319,7 @@ class TestDataRepresentation(unittest.TestCase):
     def test_repr_shows_convolved_stage(self):
         """Test that __repr__ shows 'convolved' stage."""
         data = Data(signal_file=self.temp_file)
-        data.convolute_response(pulse_duration=0.2)
+        data.convolute_response(pulse_duration=200)  # 200 µs
 
         repr_str = repr(data)
 
