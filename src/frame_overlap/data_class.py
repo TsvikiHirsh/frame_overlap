@@ -245,7 +245,7 @@ class Data:
         result['err'] = err_convolved
         return result
 
-    def overlap(self, seq, total_time=None, bin_width=10):
+    def overlap(self, seq, total_time=None, freq=None, bin_width=10):
         """
         Create overlapping frame structure.
 
@@ -262,7 +262,10 @@ class Data:
             - Frame 3 starts at t=12+10=22 ms
             - Frame 4 starts at t=22+25=47 ms
         total_time : float, optional
-            Total time frame in microseconds. If None, deduced automatically.
+            Total time frame in milliseconds. If None, deduced automatically.
+        freq : float, optional
+            Frequency in Hz. If provided, total_time = 1000/freq ms.
+            For example, freq=20 Hz means total_time=50 ms.
         bin_width : float, optional
             Time bin width in microseconds. Default is 10.
 
@@ -270,6 +273,12 @@ class Data:
         -------
         self
             Returns self for method chaining
+
+        Examples
+        --------
+        >>> data.overlap(seq=[0, 12, 10, 25])  # Auto total time
+        >>> data.overlap(seq=[0, 10], total_time=50)  # 50 ms total
+        >>> data.overlap(seq=[0, 10], freq=20)  # 20 Hz = 50 ms total
         """
         # Use squared_data if available, otherwise use data
         source_data = self.squared_data if self.squared_data is not None else self.data
@@ -285,6 +294,12 @@ class Data:
             raise ValueError("seq must have at least one element")
         if np.any(seq < 0):
             raise ValueError("All elements in seq must be non-negative")
+
+        # Handle freq parameter
+        if freq is not None:
+            if total_time is not None:
+                raise ValueError("Cannot specify both freq and total_time")
+            total_time = 1000.0 / freq  # Convert Hz to ms
 
         # Save kernel for reconstruction
         self.kernel = seq.tolist()
@@ -307,15 +322,21 @@ class Data:
         seq_us = seq * 1000
 
         # Calculate cumulative start times
-        frame_starts = np.cumsum(np.concatenate([[0], seq_us[:-1]]))
+        # seq=[0, 12, 10, 25] in ms -> seq_us=[0, 12000, 10000, 25000] in µs
+        # cumsum gives [0, 12000, 22000, 47000] which are the frame start times
+        frame_starts = np.cumsum(seq_us)
 
-        # Determine total time frame
+        # Determine total time frame (in microseconds)
         if total_time is None:
+            # Auto-calculate: last frame start + data length
             max_time_in_data = df['time'].max()
-            total_time = frame_starts[-1] + max_time_in_data
+            total_time_us = frame_starts[-1] + max_time_in_data
+        else:
+            # User provided total_time in milliseconds, convert to microseconds
+            total_time_us = total_time * 1000
 
         # Create new time axis
-        n_bins = int(total_time / bin_width) + 1
+        n_bins = int(total_time_us / bin_width) + 1
         new_time = np.arange(0, n_bins * bin_width, bin_width)
         new_counts = np.zeros(n_bins)
         new_err_squared = np.zeros(n_bins)

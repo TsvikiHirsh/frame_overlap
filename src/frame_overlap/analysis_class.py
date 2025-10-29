@@ -1,51 +1,68 @@
 """
-Analysis class for fitting reconstructed neutron ToF data.
+Analysis class for fitting reconstructed neutron ToF data using nbragg.
 
-This module provides the Analysis class for fitting reconstructed data using
-various response functions and extracting material parameters like thickness
-and composition weights.
+This module provides the Analysis class as a wrapper around nbragg for
+fitting reconstructed data and extracting material parameters.
 """
 
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from scipy.optimize import curve_fit
-from lmfit import Model, Parameters
+
+try:
+    import nbragg
+    HAS_NBRAGG = True
+except ImportError:
+    HAS_NBRAGG = False
+    print("Warning: nbragg not installed. Analysis features will be limited.")
+    print("Install with: pip install nbragg")
 
 
 class Analysis:
     """
-    Analysis object for fitting reconstructed neutron ToF data.
+    Analysis object for fitting reconstructed neutron ToF data using nbragg.
 
-    This class fits reconstructed data using various response functions
-    (square, square-jorgensen) to extract material parameters such as
-    thickness and composition weights.
+    This class wraps nbragg functionality to fit reconstructed transmission data
+    and extract material parameters. It uses nbragg's TransmissionModel with
+    optional background and response variation.
 
     Parameters
     ----------
     reconstruct : Reconstruct
         Reconstruct object containing the reconstructed data
+    cross_section_file : str, optional
+        Path to NCrystal .ncmat file for cross section.
+        Default is None (will use default material).
+    cross_section_dict : dict, optional
+        Dictionary mapping material names to .ncmat files.
+        Example: {'iron': 'Fe_sg229_Iron-alpha.ncmat'}
 
     Attributes
     ----------
     reconstruct : Reconstruct
         Reference to the input Reconstruct object
-    fit_result : dict
-        Dictionary containing fit results and parameters
-    cross_section : CrossSection
-        Cross section object defining the material composition
+    nbragg_data : nbragg.Data
+        nbragg Data object created from transmission
+    cross_section : nbragg.CrossSection
+        nbragg CrossSection object
+    model : nbragg.TransmissionModel
+        nbragg transmission model
+    result : nbragg fit result
+        Result from model.fit()
 
     Examples
     --------
     >>> from frame_overlap import Data, Reconstruct, Analysis
-    >>> data = Data('signal.csv').convolute_response(200).overlap([0, 12, 10, 25])
+    >>> data = Data('iron_powder.csv', 'openbeam.csv')
+    >>> data.convolute_response(200).overlap([0, 12, 10]).poisson_sample()
     >>> recon = Reconstruct(data).filter(kind='wiener')
-    >>> analysis = Analysis(recon)
-    >>> analysis.fit(response='square')
-    >>> analysis.plot_fit()
+    >>> analysis = Analysis(recon, cross_section_dict={'iron': 'Fe_sg229_Iron-alpha.ncmat'})
+    >>> result = analysis.fit(vary_background=True, vary_response=True)
+    >>> result.plot()
+    >>> print(result.fit_report())
     """
 
-    def __init__(self, reconstruct):
+    def __init__(self, reconstruct, cross_section_file=None, cross_section_dict=None):
         """
         Initialize Analysis object with a Reconstruct object.
 
@@ -53,7 +70,17 @@ class Analysis:
         ----------
         reconstruct : Reconstruct
             Reconstruct object with filtered data
+        cross_section_file : str, optional
+            Path to single .ncmat file
+        cross_section_dict : dict, optional
+            Dictionary of material names to .ncmat files
         """
+        if not HAS_NBRAGG:
+            raise ImportError(
+                "nbragg is required for Analysis class. "
+                "Install with: pip install nbragg"
+            )
+
         from .reconstruct import Reconstruct
 
         if not isinstance(reconstruct, Reconstruct):
@@ -63,404 +90,294 @@ class Analysis:
             raise ValueError("Reconstruct object must have reconstructed data")
 
         self.reconstruct = reconstruct
-        self.fit_result = None
+        self.nbragg_data = None
         self.cross_section = None
+        self.model = None
+        self.result = None
 
-    def set_cross_section(self, materials=None, fractions=None):
+        # Set up cross section
+        if cross_section_dict is not None:
+            self.set_cross_section(**cross_section_dict)
+        elif cross_section_file is not None:
+            # Extract material name from filename
+            import os
+            material_name = os.path.splitext(os.path.basename(cross_section_file))[0]
+            self.set_cross_section(**{material_name: cross_section_file})
+        else:
+            # Use default Fe-alpha + Cellulose mix
+            self.set_cross_section(
+                iron='Fe_sg229_Iron-alpha.ncmat',
+                cellulose='C6H10O5_Cellulose.ncmat'
+            )
+
+    def set_cross_section(self, **materials):
         """
-        Set the cross section material composition.
+        Set the cross section material composition using nbragg.
 
         Parameters
         ----------
-        materials : list of str, optional
-            List of material names. Default is ['Fe_alpha', 'Cellulose'].
-        fractions : list of float, optional
-            Fraction of each material. Default is [0.96, 0.04] (4% Cellulose).
+        **materials : dict
+            Keyword arguments mapping material names to .ncmat file paths.
+            Example: iron='Fe_sg229_Iron-alpha.ncmat', cellulose='C6H10O5_Cellulose.ncmat'
 
         Returns
         -------
         self
             Returns self for method chaining
         """
-        if materials is None:
-            materials = ['Fe_alpha', 'Cellulose']
-        if fractions is None:
-            fractions = [0.96, 0.04]
+        if not HAS_NBRAGG:
+            raise ImportError("nbragg is required")
 
-        if len(materials) != len(fractions):
-            raise ValueError("materials and fractions must have the same length")
-
-        if not np.isclose(sum(fractions), 1.0):
-            raise ValueError("fractions must sum to 1.0")
-
-        self.cross_section = CrossSection(materials, fractions)
+        self.cross_section = nbragg.CrossSection(**materials)
         return self
 
-    def fit(self, response='square', thickness_range=(0.1, 10.0),
-            weights_range=(0.0, 1.0), **kwargs):
+    def prepare_data(self, save_csv=False, csv_path='temp_transmission.csv'):
         """
-        Fit the reconstructed data using specified response function.
+        Prepare nbragg Data object from reconstructed transmission.
+
+        This converts the reconstructed data into a format suitable for nbragg.
+        If both signal and openbeam are available, transmission is calculated.
 
         Parameters
         ----------
-        response : str, optional
-            Response function type:
-            - 'square': Simple square response
-            - 'square-jorgensen': Square response with Jorgensen correction
-            Default is 'square'.
-        thickness_range : tuple, optional
-            Range for thickness parameter (min, max) in mm. Default is (0.1, 10.0).
-        weights_range : tuple, optional
-            Range for weight parameters (min, max). Default is (0.0, 1.0).
-        **kwargs
-            Additional keyword arguments for the fitting routine
+        save_csv : bool, optional
+            If True, save transmission data to CSV file. Default is False.
+        csv_path : str, optional
+            Path to save CSV file if save_csv=True.
 
         Returns
         -------
         self
             Returns self for method chaining
-
-        Raises
-        ------
-        ValueError
-            If response type is invalid or data is missing
         """
+        if not HAS_NBRAGG:
+            raise ImportError("nbragg is required")
+
+        # Get reconstructed data
+        recon_data = self.reconstruct.reconstructed_table
+
+        # Check if we have reference data (openbeam) in the original Data object
+        if (hasattr(self.reconstruct.data, 'op_data') and
+            self.reconstruct.data.op_data is not None):
+
+            # Calculate transmission from reconstructed signal and openbeam
+            # Use the appropriate stage of openbeam (same as signal)
+            if self.reconstruct.data.op_poissoned_data is not None:
+                openbeam = self.reconstruct.data.op_poissoned_data
+            elif self.reconstruct.data.op_overlapped_data is not None:
+                openbeam = self.reconstruct.data.op_overlapped_data
+            elif self.reconstruct.data.op_squared_data is not None:
+                openbeam = self.reconstruct.data.op_squared_data
+            else:
+                openbeam = self.reconstruct.data.op_data
+
+            # Align time points
+            common_times = np.intersect1d(recon_data['time'].values, openbeam['time'].values)
+            recon_subset = recon_data[recon_data['time'].isin(common_times)]
+            openbeam_subset = openbeam[openbeam['time'].isin(common_times)]
+
+            # Calculate transmission
+            transmission = recon_subset['counts'].values / (openbeam_subset['counts'].values + 1e-10)
+
+            # Error propagation
+            rel_err_sig = recon_subset['err'].values / (recon_subset['counts'].values + 1e-10)
+            rel_err_op = openbeam_subset['err'].values / (openbeam_subset['counts'].values + 1e-10)
+            trans_err = transmission * np.sqrt(rel_err_sig**2 + rel_err_op**2)
+
+            # Create DataFrame for nbragg
+            df = pd.DataFrame({
+                'stack': (recon_subset['time'].values / 10 + 1).astype(int),  # Convert time back to stack
+                'counts': transmission,
+                'err': trans_err
+            })
+        else:
+            # No openbeam available, use reconstructed counts directly
+            # Assume these are already transmission values
+            df = pd.DataFrame({
+                'stack': (recon_data['time'].values / 10 + 1).astype(int),
+                'counts': recon_data['counts'].values,
+                'err': recon_data['err'].values
+            })
+
+        if save_csv:
+            df.to_csv(csv_path, index=False)
+            self.nbragg_data = nbragg.Data.from_transmission(csv_path)
+        else:
+            # Create temporary file
+            import tempfile
+            import os
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.csv', delete=False) as f:
+                df.to_csv(f, index=False)
+                temp_path = f.name
+
+            self.nbragg_data = nbragg.Data.from_transmission(temp_path)
+
+            # Clean up temp file
+            try:
+                os.remove(temp_path)
+            except:
+                pass
+
+        return self
+
+    def fit(self, vary_background=True, vary_response=True, **kwargs):
+        """
+        Fit the reconstructed data using nbragg's TransmissionModel.
+
+        Parameters
+        ----------
+        vary_background : bool, optional
+            Whether to vary background in fit. Default is True.
+        vary_response : bool, optional
+            Whether to vary response in fit. Default is True.
+        **kwargs
+            Additional keyword arguments passed to model.fit()
+
+        Returns
+        -------
+        nbragg fit result
+            The nbragg fit result object with methods like plot() and fit_report()
+
+        Examples
+        --------
+        >>> result = analysis.fit(vary_background=True, vary_response=True)
+        >>> result.plot()
+        >>> print(result.fit_report())
+        """
+        if not HAS_NBRAGG:
+            raise ImportError("nbragg is required")
+
         if self.cross_section is None:
-            # Set default cross section
-            self.set_cross_section()
+            raise ValueError("Cross section not set. Call set_cross_section() first.")
 
-        response = response.lower()
-        if response not in ['square', 'square-jorgensen']:
-            raise ValueError(f"Unknown response '{response}'. "
-                           f"Choose from: 'square', 'square-jorgensen'")
+        # Prepare data if not already done
+        if self.nbragg_data is None:
+            self.prepare_data()
 
-        # Get data from reconstruct object
-        time = self.reconstruct.reconstructed_table['time'].values
-        counts = self.reconstruct.reconstructed_table['counts'].values
-        errors = self.reconstruct.reconstructed_table['err'].values
-
-        # Create fit model
-        if response == 'square':
-            fit_func = self._square_response
-        else:  # square-jorgensen
-            fit_func = self._square_jorgensen_response
-
-        # Set up lmfit model
-        model = Model(fit_func, independent_vars=['time'])
-
-        # Create parameters
-        params = Parameters()
-        params.add('thickness', value=1.0, min=thickness_range[0], max=thickness_range[1])
-        params.add('amplitude', value=counts.max(), min=0)
-
-        # Add weight parameters for each material (except last one which is determined)
-        n_materials = len(self.cross_section.materials)
-        for i in range(n_materials - 1):
-            params.add(f'weight_{i}', value=self.cross_section.fractions[i],
-                      min=weights_range[0], max=weights_range[1])
+        # Create TransmissionModel
+        self.model = nbragg.TransmissionModel(
+            self.cross_section,
+            vary_background=vary_background,
+            vary_response=vary_response
+        )
 
         # Perform fit
-        try:
-            result = model.fit(counts, params, time=time, weights=1.0/errors)
+        self.result = self.model.fit(self.nbragg_data, **kwargs)
 
-            # Extract results
-            self.fit_result = {
-                'success': True,
-                'response': response,
-                'thickness': result.params['thickness'].value,
-                'thickness_err': result.params['thickness'].stderr if result.params['thickness'].stderr else 0,
-                'amplitude': result.params['amplitude'].value,
-                'amplitude_err': result.params['amplitude'].stderr if result.params['amplitude'].stderr else 0,
-                'chi_square': result.chisqr,
-                'reduced_chi_square': result.redchi,
-                'aic': result.aic,
-                'bic': result.bic,
-                'n_data': len(time),
-                'n_params': len(params),
-                'fitted_counts': result.best_fit,
-                'residuals': result.residual,
-                'result_object': result
-            }
-
-            # Extract weight parameters
-            weights = []
-            for i in range(n_materials - 1):
-                w = result.params[f'weight_{i}'].value
-                w_err = result.params[f'weight_{i}'].stderr if result.params[f'weight_{i}'].stderr else 0
-                weights.append((w, w_err))
-
-            # Last weight is determined by constraint that sum = 1
-            last_weight = 1.0 - sum(w[0] for w in weights)
-            weights.append((last_weight, 0))  # Error propagation could be added
-
-            self.fit_result['weights'] = weights
-            self.fit_result['materials'] = self.cross_section.materials
-
-        except Exception as e:
-            self.fit_result = {
-                'success': False,
-                'error': str(e)
-            }
-            raise RuntimeError(f"Fit failed: {e}")
-
-        return self
-
-    def _square_response(self, time, thickness, amplitude, **weight_params):
-        """
-        Square response function for neutron transmission.
-
-        Parameters
-        ----------
-        time : np.ndarray
-            Time array in microseconds
-        thickness : float
-            Sample thickness in mm
-        amplitude : float
-            Signal amplitude
-        **weight_params : dict
-            Weight parameters for each material component
-
-        Returns
-        -------
-        np.ndarray
-            Calculated counts
-        """
-        # Simple exponential attenuation model
-        # sigma_total = sum of cross sections weighted by composition
-        sigma_total = self.cross_section.calculate_total_cross_section(**weight_params)
-
-        # Transmission = exp(-n * sigma * thickness)
-        # For ToF, we can use energy-dependent cross sections
-        # Here's a simplified model
-        transmission = np.exp(-sigma_total * thickness)
-
-        # Apply to amplitude
-        signal = amplitude * transmission * np.ones_like(time)
-
-        return signal
-
-    def _square_jorgensen_response(self, time, thickness, amplitude, **weight_params):
-        """
-        Square response with Jorgensen correction.
-
-        This adds additional physical corrections based on the Jorgensen model
-        for neutron transmission through samples.
-
-        Parameters
-        ----------
-        time : np.ndarray
-            Time array in microseconds
-        thickness : float
-            Sample thickness in mm
-        amplitude : float
-            Signal amplitude
-        **weight_params : dict
-            Weight parameters for each material component
-
-        Returns
-        -------
-        np.ndarray
-            Calculated counts
-        """
-        # Start with square response
-        signal = self._square_response(time, thickness, amplitude, **weight_params)
-
-        # Add Jorgensen corrections (simplified)
-        # In a real implementation, this would include:
-        # - Multiple scattering corrections
-        # - Detector efficiency
-        # - Geometric factors
-        # - Energy-dependent corrections
-
-        # Placeholder for Jorgensen correction factor
-        jorgensen_factor = 1.0 + 0.01 * thickness  # Simplified correction
-
-        return signal * jorgensen_factor
-
-    def get_fit_results(self):
-        """
-        Get fit results as a dictionary.
-
-        Returns
-        -------
-        dict
-            Dictionary with fit results including parameters, errors, and statistics
-        """
-        if self.fit_result is None:
-            raise ValueError("No fit results available. Call fit() first.")
-
-        return {k: v for k, v in self.fit_result.items() if k != 'result_object'}
+        return self.result
 
     def get_fit_report(self):
         """
-        Get a formatted fit report string using lmfit's built-in report.
+        Get nbragg's fit report.
 
         Returns
         -------
         str
-            Formatted fit report from lmfit
+            Formatted fit report from nbragg
         """
-        if self.fit_result is None:
+        if self.result is None:
             raise ValueError("No fit results available. Call fit() first.")
 
-        if not self.fit_result['success']:
-            return f"Fit failed: {self.fit_result.get('error', 'Unknown error')}"
+        return self.result.fit_report()
 
-        # Use lmfit's built-in fit_report method
-        if 'result_object' in self.fit_result and self.fit_result['result_object'] is not None:
-            return self.fit_result['result_object'].fit_report()
+    def plot(self, **kwargs):
+        """
+        Plot the fit results using nbragg's plot method.
+
+        Parameters
+        ----------
+        **kwargs
+            Additional keyword arguments passed to result.plot()
+
+        Returns
+        -------
+        matplotlib figure
+            The figure created by nbragg
+        """
+        if self.result is None:
+            raise ValueError("No fit results available. Call fit() first.")
+
+        return self.result.plot(**kwargs)
+
+    def plot_html(self, filename='fit_report.html'):
+        """
+        Generate HTML fit report using nbragg.
+
+        Parameters
+        ----------
+        filename : str, optional
+            Output filename for HTML report. Default is 'fit_report.html'.
+
+        Returns
+        -------
+        str
+            Path to the generated HTML file
+        """
+        if self.result is None:
+            raise ValueError("No fit results available. Call fit() first.")
+
+        # nbragg should have an HTML export method
+        # Check if it exists and use it
+        if hasattr(self.result, 'to_html'):
+            self.result.to_html(filename)
+            return filename
+        elif hasattr(self.result, 'save_html'):
+            self.result.save_html(filename)
+            return filename
         else:
-            # Fallback to basic report if result_object not available
-            return (f"Fit completed with thickness={self.fit_result['thickness']:.3f} mm, "
-                   f"reduced chi-square={self.fit_result['reduced_chi_square']:.3f}")
+            raise NotImplementedError(
+                "HTML export not available in this version of nbragg. "
+                "Use plot() or get_fit_report() instead."
+            )
 
-    def plot_fit(self):
+    def get_parameters(self):
         """
-        Plot the fit result overlaid on the data.
+        Get fitted parameters as a dictionary.
 
         Returns
         -------
-        matplotlib.figure.Figure
-            The created figure
+        dict
+            Dictionary of fitted parameters
         """
-        if self.fit_result is None or not self.fit_result['success']:
-            raise ValueError("No successful fit available. Call fit() first.")
+        if self.result is None:
+            raise ValueError("No fit results available. Call fit() first.")
 
-        time = self.reconstruct.reconstructed_table['time'].values
-        counts = self.reconstruct.reconstructed_table['counts'].values
-        fitted = self.fit_result['fitted_counts']
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        ax.plot(time, counts, 'o', label='Reconstructed Data',
-               alpha=0.6, markersize=4)
-        ax.plot(time, fitted, 'r-', label='Fit', linewidth=2)
-
-        title = (f"Fit Results (χ²/dof = {self.fit_result['reduced_chi_square']:.3f}, "
-                f"thickness = {self.fit_result['thickness']:.2f} mm)")
-        ax.set_title(title)
-        ax.set_xlabel('Time (µs)')
-        ax.set_ylabel('Counts')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        return fig
-
-    def plot_residuals(self):
-        """
-        Plot fit residuals.
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-            The created figure
-        """
-        if self.fit_result is None or not self.fit_result['success']:
-            raise ValueError("No successful fit available. Call fit() first.")
-
-        time = self.reconstruct.reconstructed_table['time'].values
-        residuals = self.fit_result['residuals']
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        ax.plot(time, residuals, 'ko', alpha=0.5, markersize=4)
-        ax.axhline(0, color='r', linestyle='--', linewidth=2)
-
-        ax.set_title('Fit Residuals')
-        ax.set_xlabel('Time (µs)')
-        ax.set_ylabel('Residuals')
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        return fig
-
-    def plot_materials(self):
-        """
-        Plot the fitted material composition.
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-            The created figure
-        """
-        if self.fit_result is None or not self.fit_result['success']:
-            raise ValueError("No successful fit available. Call fit() first.")
-
-        materials = self.fit_result['materials']
-        weights = [w[0] for w in self.fit_result['weights']]
-        errors = [w[1] for w in self.fit_result['weights']]
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        bars = ax.bar(range(len(materials)), weights, yerr=errors,
-                     capsize=5, alpha=0.7)
-        ax.set_xticks(range(len(materials)))
-        ax.set_xticklabels(materials, rotation=45, ha='right')
-        ax.set_ylabel('Weight Fraction')
-        ax.set_title('Fitted Material Composition')
-        ax.set_ylim(0, 1)
-        ax.grid(True, alpha=0.3, axis='y')
-
-        # Add percentage labels on bars
-        for i, (bar, weight) in enumerate(zip(bars, weights)):
-            height = bar.get_height()
-            ax.text(bar.get_x() + bar.get_width()/2., height,
-                   f'{weight*100:.1f}%', ha='center', va='bottom')
-
-        plt.tight_layout()
-        return fig
+        # Extract parameters from nbragg result
+        if hasattr(self.result, 'params'):
+            return {name: param.value for name, param in self.result.params.items()}
+        elif hasattr(self.result, 'best_values'):
+            return self.result.best_values
+        else:
+            raise AttributeError("Cannot extract parameters from nbragg result")
 
     def __repr__(self):
         """String representation of the Analysis object."""
-        has_fit = self.fit_result is not None and self.fit_result.get('success', False)
-        thickness = self.fit_result.get('thickness', None) if has_fit else None
-        return (f"Analysis(has_fit={has_fit}, "
-                f"thickness={thickness:.2f if thickness is not None else 'N/A'} mm)")
+        has_data = self.nbragg_data is not None
+        has_fit = self.result is not None
+        return f"Analysis(nbragg_data={has_data}, has_fit={has_fit})"
 
 
+# Legacy CrossSection class for backward compatibility
 class CrossSection:
     """
-    Cross section object for material composition.
+    Legacy CrossSection class - deprecated.
 
-    This class manages the neutron cross sections for different materials
-    and their fractional composition.
-
-    Parameters
-    ----------
-    materials : list of str
-        List of material names (e.g., ['Fe_alpha', 'Cellulose'])
-    fractions : list of float
-        Fraction of each material (must sum to 1.0)
-
-    Attributes
-    ----------
-    materials : list
-        Material names
-    fractions : list
-        Material fractions
-    cross_sections : dict
-        Dictionary mapping material names to cross section values
-
-    Examples
-    --------
-    >>> cs = CrossSection(['Fe_alpha', 'Cellulose'], [0.96, 0.04])
-    >>> total_cs = cs.calculate_total_cross_section()
+    Use nbragg.CrossSection directly instead.
     """
 
-    # Default cross section values (barns)
-    # These are simplified values - in reality, cross sections are energy-dependent
     DEFAULT_CROSS_SECTIONS = {
-        'Fe_alpha': 11.62,  # Iron alpha phase
-        'Cellulose': 5.55,  # Cellulose
-        'Al': 1.49,         # Aluminum
-        'Cu': 8.03,         # Copper
-        'Ni': 18.5,         # Nickel
-        'H2O': 5.6,         # Water
+        'Fe_alpha': 11.62,
+        'Cellulose': 5.55,
+        'Al': 1.49,
+        'Cu': 8.03,
+        'Ni': 18.5,
+        'H2O': 5.6,
     }
 
     def __init__(self, materials, fractions):
         """Initialize CrossSection with materials and fractions."""
+        print("Warning: This CrossSection class is deprecated. Use nbragg.CrossSection instead.")
+
         if len(materials) != len(fractions):
             raise ValueError("materials and fractions must have the same length")
 
@@ -471,30 +388,14 @@ class CrossSection:
         self.fractions = fractions
         self.cross_sections = {}
 
-        # Set cross sections from defaults or use placeholder
         for material in materials:
             if material in self.DEFAULT_CROSS_SECTIONS:
                 self.cross_sections[material] = self.DEFAULT_CROSS_SECTIONS[material]
             else:
-                # Use a default value if material not in database
                 self.cross_sections[material] = 10.0
-                print(f"Warning: Cross section for '{material}' not found. Using default value of 10.0 barns.")
 
     def calculate_total_cross_section(self, **weight_params):
-        """
-        Calculate the total cross section from weighted composition.
-
-        Parameters
-        ----------
-        **weight_params : dict
-            Weight parameters (weight_0, weight_1, etc.)
-
-        Returns
-        -------
-        float
-            Total cross section in barns
-        """
-        # Extract weights from parameters
+        """Calculate the total cross section from weighted composition."""
         weights = []
         n_materials = len(self.materials)
         for i in range(n_materials - 1):
@@ -504,11 +405,9 @@ class CrossSection:
             else:
                 weights.append(self.fractions[i])
 
-        # Last weight determined by constraint
         if len(weights) < n_materials:
             weights.append(1.0 - sum(weights))
 
-        # Calculate weighted sum
         total_cs = sum(w * self.cross_sections[m]
                       for w, m in zip(weights, self.materials))
 
@@ -517,4 +416,4 @@ class CrossSection:
     def __repr__(self):
         """String representation of the CrossSection object."""
         comp_str = ", ".join(f"{m}:{f:.1%}" for m, f in zip(self.materials, self.fractions))
-        return f"CrossSection({comp_str})"
+        return f"CrossSection({comp_str}) [DEPRECATED - use nbragg.CrossSection]"
