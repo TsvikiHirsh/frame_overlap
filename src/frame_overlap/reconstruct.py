@@ -97,9 +97,9 @@ class Reconstruct:
         if self.data.kernel is None:
             raise ValueError("Data object must have a kernel defined (call data.overlap first)")
 
-        # Store reference data if available
-        if self.data._convolved_data is not None:
-            self.reference_table = self.data._convolved_data.copy()
+        # Store reference data if available (squared_data before overlap)
+        if self.data.squared_data is not None:
+            self.reference_table = self.data.squared_data.copy()
 
         kind = kind.lower()
 
@@ -185,23 +185,38 @@ class Reconstruct:
         observed = self.data.table['counts'].values
         kernel = self._reconstruct_kernel()
 
-        # Normalize kernel
-        kernel = kernel / kernel.sum()
+        # Handle kernel length - truncate if longer than observed
+        if len(kernel) > len(observed):
+            kernel = kernel[:len(observed)]
 
-        # Initialize with observed signal
+        # Normalize kernel
+        if kernel.sum() > 0:
+            kernel = kernel / kernel.sum()
+        else:
+            kernel = np.ones_like(kernel) / len(kernel)
+
+        # Initialize with observed signal (ensure same length as observed)
         estimate = np.maximum(observed.copy(), 1e-10)
 
         # Richardson-Lucy iterations
         for _ in range(iterations):
-            # Convolve estimate with kernel
+            # Convolve estimate with kernel (same mode to keep length)
             convolved = np.convolve(estimate, kernel, mode='same')
             convolved = np.maximum(convolved, 1e-10)
+
+            # Ensure convolved has same length as observed
+            if len(convolved) != len(observed):
+                convolved = convolved[:len(observed)]
 
             # Calculate ratio
             ratio = observed / convolved
 
             # Convolve ratio with flipped kernel
             correction = np.convolve(ratio, kernel[::-1], mode='same')
+
+            # Ensure correction has same length
+            if len(correction) != len(estimate):
+                correction = correction[:len(estimate)]
 
             # Update estimate
             estimate = estimate * correction

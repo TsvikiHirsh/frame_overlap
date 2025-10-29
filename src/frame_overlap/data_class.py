@@ -20,6 +20,8 @@ class Data:
     with square response functions, creating frame overlap sequences, and performing
     Poisson sampling to simulate realistic neutron counting statistics.
 
+    Both signal and openbeam data go through the same processing pipeline.
+
     Parameters
     ----------
     signal_file : str, optional
@@ -37,10 +39,24 @@ class Data:
 
     Attributes
     ----------
-    table : pandas.DataFrame
-        Main data table with columns: time, counts, err
-    openbeam_table : pandas.DataFrame
-        Openbeam data table with columns: time, counts, err
+    data : pandas.DataFrame
+        Original signal data (time, counts, err)
+    squared_data : pandas.DataFrame
+        Signal after convolution with square response
+    overlapped_data : pandas.DataFrame
+        Signal after frame overlap
+    poissoned_data : pandas.DataFrame
+        Signal after Poisson sampling
+
+    op_data : pandas.DataFrame
+        Original openbeam data
+    op_squared_data : pandas.DataFrame
+        Openbeam after convolution
+    op_overlapped_data : pandas.DataFrame
+        Openbeam after frame overlap
+    op_poissoned_data : pandas.DataFrame
+        Openbeam after Poisson sampling
+
     kernel : list
         Kernel sequence used for frame overlap (e.g., [0, 12, 10, 25])
 
@@ -50,7 +66,7 @@ class Data:
     >>> data.convolute_response(pulse_duration=200)
     >>> data.overlap(seq=[0, 12, 10, 25])
     >>> data.poisson_sample(duty_cycle=0.8)
-    >>> data.plot()
+    >>> data.plot(kind='transmission')
     """
 
     def __init__(self, signal_file=None, openbeam_file=None, flux=None,
@@ -63,12 +79,23 @@ class Data:
         self.threshold = threshold
         self.max_stack = max_stack
 
-        # Initialize data storage
+        # Initialize data storage for signal at each stage
+        self.data = None  # Original
+        self.squared_data = None  # After convolution
+        self.overlapped_data = None  # After frame overlap
+        self.poissoned_data = None  # After Poisson sampling
+
+        # Initialize data storage for openbeam at each stage
+        self.op_data = None
+        self.op_squared_data = None
+        self.op_overlapped_data = None
+        self.op_poissoned_data = None
+
+        self.kernel = None
+
+        # Legacy attributes for backward compatibility
         self.table = None
         self.openbeam_table = None
-        self.kernel = None
-        self._original_data = None  # Store original data before processing
-        self._convolved_data = None  # Store data after convolution but before overlap
 
         # Load data if files provided
         if signal_file:
@@ -119,8 +146,8 @@ class Data:
             raise ValueError("Data must not contain NaN values")
 
         # Store as DataFrame
-        self.table = df[['time', 'counts', 'err']].copy()
-        self._original_data = self.table.copy()
+        self.data = df[['time', 'counts', 'err']].copy()
+        self.table = self.data  # For backward compatibility
         self.signal_file = file_path
 
         return self
@@ -159,7 +186,8 @@ class Data:
             raise ValueError("Data must not contain NaN values")
 
         # Store as DataFrame
-        self.openbeam_table = df[['time', 'counts', 'err']].copy()
+        self.op_data = df[['time', 'counts', 'err']].copy()
+        self.openbeam_table = self.op_data  # For backward compatibility
         self.openbeam_file = file_path
 
         return self
@@ -169,7 +197,7 @@ class Data:
         Convolute data with a square response function.
 
         This mimics how the data would look when measured with an instrument
-        having a longer pulse duration.
+        having a longer pulse duration. Applies to both signal and openbeam.
 
         Parameters
         ----------
@@ -182,47 +210,47 @@ class Data:
         -------
         self
             Returns self for method chaining
-
-        Raises
-        ------
-        ValueError
-            If table is not loaded or pulse_duration is invalid
-
-        Examples
-        --------
-        >>> data = Data('signal.csv')
-        >>> data.convolute_response(pulse_duration=200)
         """
-        if self.table is None:
-            raise ValueError("No data loaded. Call load_signal_data first.")
+        if self.data is None:
+            raise ValueError("No signal data loaded. Call load_signal_data first.")
 
         if pulse_duration <= 0:
             raise ValueError("pulse_duration must be positive")
 
-        # Create square pulse kernel
+        # Create square pulse kernel (normalized)
         pulse_length = int(pulse_duration / bin_width)
-        kernel = np.ones(pulse_length) / pulse_length  # Normalized
+        kernel = np.ones(pulse_length) / pulse_length
 
-        # Convolve signal and propagate errors
-        counts_convolved = np.convolve(self.table['counts'].values, kernel, mode='same')
+        # Convolve signal
+        self.squared_data = self._convolve_dataframe(self.data, kernel)
+        self.table = self.squared_data  # Update for backward compatibility
 
-        # Error propagation for convolution (sum in quadrature, weighted by kernel)
-        err_squared = self.table['err'].values ** 2
-        err_convolved = np.sqrt(np.convolve(err_squared, kernel**2, mode='same'))
-
-        # Update table
-        self.table['counts'] = counts_convolved
-        self.table['err'] = err_convolved
-        self._convolved_data = self.table.copy()
+        # Convolve openbeam if available
+        if self.op_data is not None:
+            self.op_squared_data = self._convolve_dataframe(self.op_data, kernel)
+            self.openbeam_table = self.op_squared_data
 
         return self
+
+    def _convolve_dataframe(self, df, kernel):
+        """Helper to convolve a dataframe with a kernel."""
+        counts_convolved = np.convolve(df['counts'].values, kernel, mode='same')
+
+        # Error propagation for convolution
+        err_squared = df['err'].values ** 2
+        err_convolved = np.sqrt(np.convolve(err_squared, kernel**2, mode='same'))
+
+        result = df.copy()
+        result['counts'] = counts_convolved
+        result['err'] = err_convolved
+        return result
 
     def overlap(self, seq, total_time=None, bin_width=10):
         """
         Create overlapping frame structure.
 
         This method duplicates the data into multiple frames with specified time
-        delays, simulating frame overlap in Time-of-Flight measurements.
+        delays. Applies to both signal and openbeam.
 
         Parameters
         ----------
@@ -234,8 +262,7 @@ class Data:
             - Frame 3 starts at t=12+10=22 ms
             - Frame 4 starts at t=22+25=47 ms
         total_time : float, optional
-            Total time frame in microseconds. If None, deduced automatically
-            from the data length and sequence.
+            Total time frame in microseconds. If None, deduced automatically.
         bin_width : float, optional
             Time bin width in microseconds. Default is 10.
 
@@ -243,18 +270,11 @@ class Data:
         -------
         self
             Returns self for method chaining
-
-        Raises
-        ------
-        ValueError
-            If table is not loaded or seq is invalid
-
-        Examples
-        --------
-        >>> data = Data('signal.csv')
-        >>> data.overlap(seq=[0, 12, 10, 25])
         """
-        if self.table is None:
+        # Use squared_data if available, otherwise use data
+        source_data = self.squared_data if self.squared_data is not None else self.data
+
+        if source_data is None:
             raise ValueError("No data loaded. Call load_signal_data first.")
 
         if not isinstance(seq, (list, tuple, np.ndarray)):
@@ -269,6 +289,20 @@ class Data:
         # Save kernel for reconstruction
         self.kernel = seq.tolist()
 
+        # Apply overlap to signal
+        self.overlapped_data = self._create_overlap(source_data, seq, total_time, bin_width)
+        self.table = self.overlapped_data
+
+        # Apply overlap to openbeam if available
+        op_source = self.op_squared_data if self.op_squared_data is not None else self.op_data
+        if op_source is not None:
+            self.op_overlapped_data = self._create_overlap(op_source, seq, total_time, bin_width)
+            self.openbeam_table = self.op_overlapped_data
+
+        return self
+
+    def _create_overlap(self, df, seq, total_time, bin_width):
+        """Helper to create overlap for a dataframe."""
         # Convert seq from milliseconds to microseconds
         seq_us = seq * 1000
 
@@ -277,7 +311,7 @@ class Data:
 
         # Determine total time frame
         if total_time is None:
-            max_time_in_data = self.table['time'].max()
+            max_time_in_data = df['time'].max()
             total_time = frame_starts[-1] + max_time_in_data
 
         # Create new time axis
@@ -289,25 +323,26 @@ class Data:
         # Add each frame to the overlapped signal
         for frame_start in frame_starts:
             start_idx = int(frame_start / bin_width)
-            for i, row in self.table.iterrows():
+            for i, row in df.iterrows():
                 time_idx = start_idx + int(row['time'] / bin_width)
                 if time_idx < n_bins:
                     new_counts[time_idx] += row['counts']
                     new_err_squared[time_idx] += row['err']**2
 
-        # Create new table
+        # Create new dataframe
         new_err = np.sqrt(new_err_squared)
-        self.table = pd.DataFrame({
+        result = pd.DataFrame({
             'time': new_time[:len(new_counts)],
             'counts': new_counts,
             'err': new_err
         })
-
-        return self
+        return result
 
     def poisson_sample(self, duty_cycle=1.0):
         """
         Apply Poisson sampling to simulate realistic neutron counting statistics.
+
+        Applies to both signal and openbeam.
 
         Parameters
         ----------
@@ -318,48 +353,67 @@ class Data:
         -------
         self
             Returns self for method chaining
-
-        Raises
-        ------
-        ValueError
-            If table is not loaded or parameters are invalid
-
-        Examples
-        --------
-        >>> data = Data('signal.csv')
-        >>> data.poisson_sample(duty_cycle=0.8)
         """
-        if self.table is None:
+        # Use overlapped_data if available, otherwise squared_data, otherwise data
+        source_data = (self.overlapped_data if self.overlapped_data is not None
+                      else self.squared_data if self.squared_data is not None
+                      else self.data)
+
+        if source_data is None:
             raise ValueError("No data loaded. Call load_signal_data first.")
 
         if not 0 < duty_cycle <= 1:
             raise ValueError("duty_cycle must be between 0 and 1")
 
-        # Calculate scaling factor based on flux, duration, and duty cycle
-        if self.flux is not None and self.duration is not None:
-            # Scale by flux * duration * duty_cycle
-            scale_factor = self.flux * self.duration * duty_cycle / self.table['counts'].sum()
-        else:
-            scale_factor = duty_cycle
+        # Apply Poisson to signal
+        self.poissoned_data = self._apply_poisson(source_data, duty_cycle)
+        self.table = self.poissoned_data
 
-        # Apply Poisson sampling
-        scaled_counts = self.table['counts'].values * scale_factor
-        poisson_counts = poisson.rvs(np.clip(scaled_counts, 0, None))
-
-        # Update table with Poisson-sampled data
-        self.table['counts'] = poisson_counts
-        self.table['err'] = np.sqrt(np.maximum(poisson_counts, 1))  # Poisson error
+        # Apply Poisson to openbeam if available
+        op_source = (self.op_overlapped_data if self.op_overlapped_data is not None
+                    else self.op_squared_data if self.op_squared_data is not None
+                    else self.op_data)
+        if op_source is not None:
+            self.op_poissoned_data = self._apply_poisson(op_source, duty_cycle)
+            self.openbeam_table = self.op_poissoned_data
 
         return self
 
-    def plot(self, show_errors=True, **kwargs):
+    def _apply_poisson(self, df, duty_cycle):
+        """Helper to apply Poisson sampling to a dataframe."""
+        # Scale counts by duty cycle
+        scaled_counts = df['counts'].values * duty_cycle
+
+        # Apply Poisson sampling
+        poisson_counts = poisson.rvs(np.maximum(scaled_counts, 0))
+
+        # Poisson error is sqrt(counts)
+        poisson_err = np.sqrt(np.maximum(poisson_counts, 1))
+
+        result = df.copy()
+        result['counts'] = poisson_counts.astype(float)
+        result['err'] = poisson_err
+        return result
+
+    def plot(self, kind='auto', show_stages=False, show_errors=True, fontsize=14, **kwargs):
         """
-        Plot the current data.
+        Plot the data.
 
         Parameters
         ----------
+        kind : str, optional
+            Type of plot:
+            - 'auto': Automatically choose best plot type (default)
+            - 'transmission': Plot signal/openbeam ratio
+            - 'signal': Plot signal only
+            - 'openbeam': Plot openbeam only
+            - 'both': Plot signal and openbeam on same axes
+        show_stages : bool, optional
+            If True, show all processing stages on the same plot. Default is False.
         show_errors : bool, optional
             Whether to show error bars. Default is True.
+        fontsize : int, optional
+            Font size for labels and titles. Default is 14.
         **kwargs
             Additional keyword arguments passed to matplotlib.pyplot.plot
 
@@ -368,77 +422,205 @@ class Data:
         matplotlib.figure.Figure
             The created figure
         """
-        if self.table is None:
-            raise ValueError("No data loaded. Call load_signal_data first.")
+        fig, ax = plt.subplots(figsize=(12, 7))
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        # Set font sizes
+        plt.rcParams.update({'font.size': fontsize})
 
-        if show_errors:
-            ax.errorbar(self.table['time'], self.table['counts'],
-                       yerr=self.table['err'], fmt='o-', capsize=3,
-                       label='Signal', **kwargs)
+        # Auto-detect plot kind
+        if kind == 'auto':
+            if self.data is not None and self.op_data is not None:
+                kind = 'transmission'
+            elif self.data is not None:
+                kind = 'signal'
+            elif self.op_data is not None:
+                kind = 'openbeam'
+            else:
+                raise ValueError("No data loaded")
+
+        if kind == 'transmission':
+            self._plot_transmission(ax, show_stages, show_errors, **kwargs)
+        elif kind == 'signal':
+            self._plot_signal(ax, show_stages, show_errors, **kwargs)
+        elif kind == 'openbeam':
+            self._plot_openbeam(ax, show_stages, show_errors, **kwargs)
+        elif kind == 'both':
+            self._plot_both(ax, show_stages, show_errors, **kwargs)
         else:
-            ax.plot(self.table['time'], self.table['counts'],
-                   'o-', label='Signal', **kwargs)
+            raise ValueError(f"Unknown kind '{kind}'. Choose from: 'auto', 'transmission', 'signal', 'openbeam', 'both'")
 
-        ax.set_xlabel('Time (µs)')
-        ax.set_ylabel('Counts')
-        ax.set_title('Neutron Time-of-Flight Data')
-        ax.legend()
         ax.grid(True, alpha=0.3)
-
+        ax.legend(fontsize=fontsize-2)
         plt.tight_layout()
         return fig
 
-    def plot_comparison(self, other_data=None, labels=None):
+    def _plot_transmission(self, ax, show_stages, show_errors, **kwargs):
+        """Plot transmission (signal/openbeam ratio)."""
+        if self.data is None or self.op_data is None:
+            raise ValueError("Both signal and openbeam data must be loaded for transmission plot")
+
+        if show_stages:
+            # Show all stages
+            stages = [
+                (self.data, self.op_data, 'Original'),
+                (self.squared_data, self.op_squared_data, 'Squared'),
+                (self.overlapped_data, self.op_overlapped_data, 'Overlapped'),
+                (self.poissoned_data, self.op_poissoned_data, 'Poissoned')
+            ]
+
+            for sig, op, label in stages:
+                if sig is not None and op is not None:
+                    trans = self._calculate_transmission(sig, op)
+                    if show_errors:
+                        ax.errorbar(trans['time'], trans['transmission'],
+                                  yerr=trans['err'], fmt='o-', capsize=3,
+                                  label=label, alpha=0.7, **kwargs)
+                    else:
+                        ax.plot(trans['time'], trans['transmission'],
+                              'o-', label=label, alpha=0.7, **kwargs)
+        else:
+            # Show current stage only
+            sig = self.poissoned_data or self.overlapped_data or self.squared_data or self.data
+            op = self.op_poissoned_data or self.op_overlapped_data or self.op_squared_data or self.op_data
+
+            if sig is not None and op is not None:
+                trans = self._calculate_transmission(sig, op)
+                if show_errors:
+                    ax.errorbar(trans['time'], trans['transmission'],
+                              yerr=trans['err'], fmt='o-', capsize=3,
+                              label='Transmission', **kwargs)
+                else:
+                    ax.plot(trans['time'], trans['transmission'],
+                          'o-', label='Transmission', **kwargs)
+
+        ax.set_xlabel('Time (µs)', fontsize=plt.rcParams['font.size'])
+        ax.set_ylabel('Transmission', fontsize=plt.rcParams['font.size'])
+        ax.set_title('Neutron Transmission', fontsize=plt.rcParams['font.size']+2)
+
+    def _plot_signal(self, ax, show_stages, show_errors, **kwargs):
+        """Plot signal data."""
+        if self.data is None:
+            raise ValueError("No signal data loaded")
+
+        if show_stages:
+            stages = [
+                (self.data, 'Original'),
+                (self.squared_data, 'Squared'),
+                (self.overlapped_data, 'Overlapped'),
+                (self.poissoned_data, 'Poissoned')
+            ]
+            for df, label in stages:
+                if df is not None:
+                    if show_errors:
+                        ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                                  fmt='o-', capsize=3, label=label, alpha=0.7)
+                    else:
+                        ax.plot(df['time'], df['counts'], 'o-', label=label, alpha=0.7)
+        else:
+            df = self.poissoned_data or self.overlapped_data or self.squared_data or self.data
+            if show_errors:
+                ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                          fmt='o-', capsize=3, label='Signal', **kwargs)
+            else:
+                ax.plot(df['time'], df['counts'], 'o-', label='Signal', **kwargs)
+
+        ax.set_xlabel('Time (µs)', fontsize=plt.rcParams['font.size'])
+        ax.set_ylabel('Counts', fontsize=plt.rcParams['font.size'])
+        ax.set_title('Neutron Signal', fontsize=plt.rcParams['font.size']+2)
+
+    def _plot_openbeam(self, ax, show_stages, show_errors, **kwargs):
+        """Plot openbeam data."""
+        if self.op_data is None:
+            raise ValueError("No openbeam data loaded")
+
+        if show_stages:
+            stages = [
+                (self.op_data, 'Original'),
+                (self.op_squared_data, 'Squared'),
+                (self.op_overlapped_data, 'Overlapped'),
+                (self.op_poissoned_data, 'Poissoned')
+            ]
+            for df, label in stages:
+                if df is not None:
+                    if show_errors:
+                        ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                                  fmt='s-', capsize=3, label=label, alpha=0.7)
+                    else:
+                        ax.plot(df['time'], df['counts'], 's-', label=label, alpha=0.7)
+        else:
+            df = self.op_poissoned_data or self.op_overlapped_data or self.op_squared_data or self.op_data
+            if show_errors:
+                ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                          fmt='s-', capsize=3, label='Openbeam', **kwargs)
+            else:
+                ax.plot(df['time'], df['counts'], 's-', label='Openbeam', **kwargs)
+
+        ax.set_xlabel('Time (µs)', fontsize=plt.rcParams['font.size'])
+        ax.set_ylabel('Counts', fontsize=plt.rcParams['font.size'])
+        ax.set_title('Openbeam Data', fontsize=plt.rcParams['font.size']+2)
+
+    def _plot_both(self, ax, show_stages, show_errors, **kwargs):
+        """Plot both signal and openbeam."""
+        if self.data is None:
+            raise ValueError("No signal data loaded")
+
+        # Plot signal
+        if show_stages:
+            stages = [(self.data, 'Signal Original'), (self.squared_data, 'Signal Squared'),
+                     (self.overlapped_data, 'Signal Overlapped'), (self.poissoned_data, 'Signal Poissoned')]
+            for df, label in stages:
+                if df is not None:
+                    ax.plot(df['time'], df['counts'], 'o-', label=label, alpha=0.7)
+        else:
+            sig = self.poissoned_data or self.overlapped_data or self.squared_data or self.data
+            ax.plot(sig['time'], sig['counts'], 'o-', label='Signal', alpha=0.7)
+
+        # Plot openbeam if available
+        if self.op_data is not None:
+            if show_stages:
+                stages = [(self.op_data, 'Openbeam Original'), (self.op_squared_data, 'Openbeam Squared'),
+                         (self.op_overlapped_data, 'Openbeam Overlapped'), (self.op_poissoned_data, 'Openbeam Poissoned')]
+                for df, label in stages:
+                    if df is not None:
+                        ax.plot(df['time'], df['counts'], 's-', label=label, alpha=0.7)
+            else:
+                op = self.op_poissoned_data or self.op_overlapped_data or self.op_squared_data or self.op_data
+                ax.plot(op['time'], op['counts'], 's-', label='Openbeam', alpha=0.7)
+
+        ax.set_xlabel('Time (µs)', fontsize=plt.rcParams['font.size'])
+        ax.set_ylabel('Counts', fontsize=plt.rcParams['font.size'])
+        ax.set_title('Signal and Openbeam', fontsize=plt.rcParams['font.size']+2)
+
+    def _calculate_transmission(self, signal_df, openbeam_df):
+        """Calculate transmission ratio with error propagation."""
+        # Ensure same time points (interpolate if needed)
+        if not np.array_equal(signal_df['time'].values, openbeam_df['time'].values):
+            # Find common time points
+            common_times = np.intersect1d(signal_df['time'].values, openbeam_df['time'].values)
+            signal_df = signal_df[signal_df['time'].isin(common_times)]
+            openbeam_df = openbeam_df[openbeam_df['time'].isin(common_times)]
+
+        # Calculate transmission
+        transmission = signal_df['counts'].values / (openbeam_df['counts'].values + 1e-10)
+
+        # Error propagation: σ_T = T * sqrt((σ_S/S)^2 + (σ_O/O)^2)
+        rel_err_sig = signal_df['err'].values / (signal_df['counts'].values + 1e-10)
+        rel_err_op = openbeam_df['err'].values / (openbeam_df['counts'].values + 1e-10)
+        trans_err = transmission * np.sqrt(rel_err_sig**2 + rel_err_op**2)
+
+        return pd.DataFrame({
+            'time': signal_df['time'].values,
+            'transmission': transmission,
+            'err': trans_err
+        })
+
+    def plot_comparison(self, other_data=None, labels=None, fontsize=14):
         """
         Plot comparison between signal and openbeam or another Data object.
 
-        Parameters
-        ----------
-        other_data : Data, optional
-            Another Data object to compare with. If None, uses openbeam_table.
-        labels : list of str, optional
-            Labels for the plots. Default is ['Signal', 'Openbeam'].
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-            The created figure
+        DEPRECATED: Use plot(kind='both') or plot(kind='transmission') instead.
         """
-        if self.table is None:
-            raise ValueError("No data loaded.")
-
-        if labels is None:
-            labels = ['Signal', 'Openbeam']
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        # Plot signal
-        ax.plot(self.table['time'], self.table['counts'],
-               'o-', label=labels[0], alpha=0.7)
-
-        # Plot comparison data
-        if other_data is not None:
-            if isinstance(other_data, Data):
-                ax.plot(other_data.table['time'], other_data.table['counts'],
-                       's-', label=labels[1], alpha=0.7)
-            else:
-                raise ValueError("other_data must be a Data object")
-        elif self.openbeam_table is not None:
-            ax.plot(self.openbeam_table['time'], self.openbeam_table['counts'],
-                   's-', label=labels[1], alpha=0.7)
-        else:
-            raise ValueError("No comparison data available")
-
-        ax.set_xlabel('Time (µs)')
-        ax.set_ylabel('Counts')
-        ax.set_title('Data Comparison')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        return fig
+        return self.plot(kind='both', fontsize=fontsize)
 
     def copy(self):
         """
@@ -451,18 +633,43 @@ class Data:
         """
         new_data = Data(flux=self.flux, duration=self.duration,
                        threshold=self.threshold, max_stack=self.max_stack)
-        new_data.table = self.table.copy() if self.table is not None else None
-        new_data.openbeam_table = self.openbeam_table.copy() if self.openbeam_table is not None else None
+
+        # Copy all dataframes
+        new_data.data = self.data.copy() if self.data is not None else None
+        new_data.squared_data = self.squared_data.copy() if self.squared_data is not None else None
+        new_data.overlapped_data = self.overlapped_data.copy() if self.overlapped_data is not None else None
+        new_data.poissoned_data = self.poissoned_data.copy() if self.poissoned_data is not None else None
+
+        new_data.op_data = self.op_data.copy() if self.op_data is not None else None
+        new_data.op_squared_data = self.op_squared_data.copy() if self.op_squared_data is not None else None
+        new_data.op_overlapped_data = self.op_overlapped_data.copy() if self.op_overlapped_data is not None else None
+        new_data.op_poissoned_data = self.op_poissoned_data.copy() if self.op_poissoned_data is not None else None
+
         new_data.kernel = self.kernel.copy() if self.kernel is not None else None
-        new_data._original_data = self._original_data.copy() if self._original_data is not None else None
-        new_data._convolved_data = self._convolved_data.copy() if self._convolved_data is not None else None
         new_data.signal_file = self.signal_file
         new_data.openbeam_file = self.openbeam_file
+
+        # Update legacy attributes
+        new_data.table = (new_data.poissoned_data if new_data.poissoned_data is not None
+                         else new_data.overlapped_data if new_data.overlapped_data is not None
+                         else new_data.squared_data if new_data.squared_data is not None
+                         else new_data.data)
+        new_data.openbeam_table = (new_data.op_poissoned_data if new_data.op_poissoned_data is not None
+                                   else new_data.op_overlapped_data if new_data.op_overlapped_data is not None
+                                   else new_data.op_squared_data if new_data.op_squared_data is not None
+                                   else new_data.op_data)
+
         return new_data
 
     def __repr__(self):
         """String representation of the Data object."""
-        n_points = len(self.table) if self.table is not None else 0
-        has_openbeam = self.openbeam_table is not None
-        return (f"Data(n_points={n_points}, flux={self.flux}, duration={self.duration}, "
+        n_points = len(self.data) if self.data is not None else 0
+        has_openbeam = self.op_data is not None
+        current_stage = (
+            'poissoned' if self.poissoned_data is not None
+            else 'overlapped' if self.overlapped_data is not None
+            else 'squared' if self.squared_data is not None
+            else 'original'
+        )
+        return (f"Data(n_points={n_points}, stage='{current_stage}', "
                 f"has_openbeam={has_openbeam}, kernel={self.kernel})")

@@ -293,12 +293,12 @@ class Analysis:
 
     def get_fit_report(self):
         """
-        Get a formatted fit report string.
+        Get a formatted fit report string using lmfit's built-in report.
 
         Returns
         -------
         str
-            Formatted fit report
+            Formatted fit report from lmfit
         """
         if self.fit_result is None:
             raise ValueError("No fit results available. Call fit() first.")
@@ -306,30 +306,13 @@ class Analysis:
         if not self.fit_result['success']:
             return f"Fit failed: {self.fit_result.get('error', 'Unknown error')}"
 
-        report = []
-        report.append("=" * 60)
-        report.append("FIT RESULTS")
-        report.append("=" * 60)
-        report.append(f"Response function: {self.fit_result['response']}")
-        report.append(f"Number of data points: {self.fit_result['n_data']}")
-        report.append(f"Number of parameters: {self.fit_result['n_params']}")
-        report.append("")
-        report.append("Parameters:")
-        report.append(f"  Thickness: {self.fit_result['thickness']:.4f} ± {self.fit_result['thickness_err']:.4f} mm")
-        report.append(f"  Amplitude: {self.fit_result['amplitude']:.2f} ± {self.fit_result['amplitude_err']:.2f}")
-        report.append("")
-        report.append("Material composition:")
-        for material, (weight, err) in zip(self.fit_result['materials'], self.fit_result['weights']):
-            report.append(f"  {material}: {weight:.4f} ± {err:.4f} ({weight*100:.2f}%)")
-        report.append("")
-        report.append("Goodness of fit:")
-        report.append(f"  χ² = {self.fit_result['chi_square']:.2f}")
-        report.append(f"  Reduced χ² = {self.fit_result['reduced_chi_square']:.3f}")
-        report.append(f"  AIC = {self.fit_result['aic']:.2f}")
-        report.append(f"  BIC = {self.fit_result['bic']:.2f}")
-        report.append("=" * 60)
-
-        return "\n".join(report)
+        # Use lmfit's built-in fit_report method
+        if 'result_object' in self.fit_result and self.fit_result['result_object'] is not None:
+            return self.fit_result['result_object'].fit_report()
+        else:
+            # Fallback to basic report if result_object not available
+            return (f"Fit completed with thickness={self.fit_result['thickness']:.3f} mm, "
+                   f"reduced chi-square={self.fit_result['reduced_chi_square']:.3f}")
 
     def plot_fit(self):
         """
