@@ -150,8 +150,8 @@ class Data:
             df = df.loc[df['stack'] >= threshold]
 
         # Convert to time and validate
-        # Convert stack to time in ms (each stack is 10 µs = 0.01 ms)
-        df['time'] = (df['stack'] - 1) * 0.01
+        # Convert stack to time in µs (each stack is 10 µs)
+        df['time'] = (df['stack'] - 1) * 10
 
         if np.any(df['err'] <= 0):
             raise ValueError("Errors must be positive")
@@ -191,8 +191,8 @@ class Data:
             df = df.loc[df['stack'] >= threshold]
 
         # Convert to time and validate
-        # Convert stack to time in ms (each stack is 10 µs = 0.01 ms)
-        df['time'] = (df['stack'] - 1) * 0.01
+        # Convert stack to time in µs (each stack is 10 µs)
+        df['time'] = (df['stack'] - 1) * 10
 
         if np.any(df['err'] <= 0):
             raise ValueError("Errors must be positive")
@@ -206,7 +206,7 @@ class Data:
 
         return self
 
-    def convolute_response(self, pulse_duration, bin_width=0.01):
+    def convolute_response(self, pulse_duration, bin_width=10):
         """
         Convolute data with a square response function.
 
@@ -216,9 +216,9 @@ class Data:
         Parameters
         ----------
         pulse_duration : float
-            Duration of the square pulse in milliseconds
+            Duration of the square pulse in microseconds
         bin_width : float, optional
-            Time bin width in milliseconds. Default is 0.01 (10 µs).
+            Time bin width in microseconds. Default is 10 µs.
 
         Returns
         -------
@@ -262,7 +262,7 @@ class Data:
         })
         return result
 
-    def overlap(self, kernel, total_time=None, freq=None, bin_width=0.01):
+    def overlap(self, kernel, total_time=None, freq=None, bin_width=10):
         """
         Create overlapping frame structure.
 
@@ -286,7 +286,7 @@ class Data:
             Frequency in Hz. If provided, total_time = 1000/freq ms.
             For example, freq=20 Hz means total_time=50 ms.
         bin_width : float, optional
-            Time bin width in milliseconds. Default is 0.01 (10 µs).
+            Time bin width in microseconds. Default is 10 µs.
 
         Returns
         -------
@@ -339,44 +339,55 @@ class Data:
 
     def _create_overlap(self, df, kernel, total_time, bin_width):
         """Helper to create overlap for a dataframe with wraparound support."""
-        # kernel is already in milliseconds
-        kernel_ms = kernel
+        # Convert kernel from milliseconds to microseconds
+        kernel_us = np.array(kernel) * 1000
 
-        # Calculate cumulative start times
-        # kernel=[0, 12, 10, 25] in ms
-        # cumsum gives [0, 12, 22, 47] which are the frame start times in ms
-        frame_starts = np.cumsum(kernel_ms)
+        # Calculate cumulative start times in microseconds
+        # kernel=[0, 12, 10, 25] in ms -> [0, 12000, 22000, 47000] in µs
+        frame_starts_us = np.cumsum(kernel_us)
 
-        # Determine total time frame (in milliseconds)
+        # Get input data arrays
+        time_array = df['time'].values  # Already in µs
+        counts_array = df['counts'].values
+        err_array = df['err'].values
+
+        # Determine total time frame (in microseconds)
         if total_time is None:
             # Auto-calculate: last frame start + data length
-            max_time_in_data = df['time'].max()
-            total_time_ms = frame_starts[-1] + max_time_in_data
+            max_time_in_data = time_array.max()
+            total_time_us = frame_starts_us[-1] + max_time_in_data
         else:
-            # User provided total_time in milliseconds
-            total_time_ms = total_time
+            # User provided total_time in milliseconds, convert to microseconds
+            total_time_us = total_time * 1000
 
-        # Create new time axis
-        n_bins = int(total_time_ms / bin_width) + 1
-        new_time = np.arange(0, n_bins * bin_width, bin_width)
+        # Round total_time to integer number of bins
+        n_bins = int(np.round(total_time_us / bin_width))
+        total_time_us = n_bins * bin_width
+
+        # Create output arrays
+        new_time = np.arange(0, n_bins) * bin_width
         new_counts = np.zeros(n_bins)
         new_err_squared = np.zeros(n_bins)
 
         # Add each frame to the overlapped signal with wraparound
-        for frame_start in frame_starts:
-            start_idx = int(frame_start / bin_width)
-            for i, row in df.iterrows():
-                time_idx = start_idx + int(row['time'] / bin_width)
-                # Implement wraparound: if time_idx exceeds n_bins, wrap to beginning
-                if time_idx >= n_bins:
-                    time_idx = time_idx % n_bins
-                new_counts[time_idx] += row['counts']
-                new_err_squared[time_idx] += row['err']**2
+        for frame_start_us in frame_starts_us:
+            # Calculate starting bin index for this frame
+            start_bin = int(np.round(frame_start_us / bin_width))
 
-        # Create new dataframe
+            # Calculate indices for all data points in this frame
+            data_bins = np.round(time_array / bin_width).astype(int)
+            target_bins = (start_bin + data_bins) % n_bins  # Wraparound with modulo
+
+            # Add counts and errors using array operations
+            np.add.at(new_counts, target_bins, counts_array)
+            np.add.at(new_err_squared, target_bins, err_array**2)
+
+        # Calculate final errors
         new_err = np.sqrt(new_err_squared)
+
+        # Create result dataframe
         result = pd.DataFrame({
-            'time': new_time[:len(new_counts)],
+            'time': new_time,
             'counts': new_counts,
             'err': new_err
         })
@@ -487,7 +498,7 @@ class Data:
         result['err'] = poisson_err
         return result
 
-    def plot(self, kind='auto', show_stages=False, show_errors=True, fontsize=16, figsize=(10, 6), **kwargs):
+    def plot(self, kind='auto', show_stages=False, show_errors=False, fontsize=16, figsize=(10, 6), **kwargs):
         """
         Plot the data using pandas plotting methods.
 
@@ -572,12 +583,15 @@ class Data:
             for sig, op, label in stages:
                 if sig is not None and op is not None:
                     trans = self._calculate_transmission(sig, op)
+                    # Convert time to ms for plotting
+                    trans_plot = trans.copy()
+                    trans_plot['time'] = trans_plot['time'] / 1000
                     # Use pandas plot with step drawstyle
-                    trans.set_index('time')['transmission'].plot(
+                    trans_plot.set_index('time')['transmission'].plot(
                         ax=ax, drawstyle='steps-mid', label=label, alpha=0.7, **kwargs)
                     if show_errors:
-                        ax.errorbar(trans['time'], trans['transmission'],
-                                  yerr=trans['err'], fmt='none', ecolor='0.5',
+                        ax.errorbar(trans_plot['time'].values, trans_plot['transmission'],
+                                  yerr=trans_plot['err'], fmt='none', ecolor='0.5',
                                   capsize=2, alpha=0.5)
         else:
             # Show current stage only
@@ -592,12 +606,15 @@ class Data:
 
             if sig is not None and op is not None:
                 trans = self._calculate_transmission(sig, op)
+                # Convert time to ms for plotting
+                trans_plot = trans.copy()
+                trans_plot['time'] = trans_plot['time'] / 1000
                 # Use pandas plot with step drawstyle
-                trans.set_index('time')['transmission'].plot(
+                trans_plot.set_index('time')['transmission'].plot(
                     ax=ax, drawstyle='steps-mid', label='Transmission', **kwargs)
                 if show_errors:
-                    ax.errorbar(trans['time'], trans['transmission'],
-                              yerr=trans['err'], fmt='none', ecolor='0.5',
+                    ax.errorbar(trans_plot['time'].values, trans_plot['transmission'],
+                              yerr=trans_plot['err'], fmt='none', ecolor='0.5',
                               capsize=2, alpha=0.5)
 
         ax.set_xlabel('Time (ms)')
@@ -618,22 +635,28 @@ class Data:
             ]
             for df, label in stages:
                 if df is not None:
+                    # Convert time to ms for plotting
+                    df_plot = df.copy()
+                    df_plot['time'] = df_plot['time'] / 1000
                     # Use pandas plot with step drawstyle
-                    df.set_index('time')['counts'].plot(
+                    df_plot.set_index('time')['counts'].plot(
                         ax=ax, drawstyle='steps-mid', label=label, alpha=0.7, **kwargs)
                     if show_errors:
-                        ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                        ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                                   fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
         else:
             df = (self.poissoned_data if self.poissoned_data is not None
                  else self.overlapped_data if self.overlapped_data is not None
                  else self.convolved_data if self.convolved_data is not None
                  else self.data)
+            # Convert time to ms for plotting
+            df_plot = df.copy()
+            df_plot['time'] = df_plot['time'] / 1000
             # Use pandas plot with step drawstyle
-            df.set_index('time')['counts'].plot(
+            df_plot.set_index('time')['counts'].plot(
                 ax=ax, drawstyle='steps-mid', label='Signal', **kwargs)
             if show_errors:
-                ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                           fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
 
         ax.set_xlabel('Time (ms)')
@@ -654,22 +677,28 @@ class Data:
             ]
             for df, label in stages:
                 if df is not None:
+                    # Convert time to ms for plotting
+                    df_plot = df.copy()
+                    df_plot['time'] = df_plot['time'] / 1000
                     # Use pandas plot with step drawstyle
-                    df.set_index('time')['counts'].plot(
+                    df_plot.set_index('time')['counts'].plot(
                         ax=ax, drawstyle='steps-mid', label=label, alpha=0.7, **kwargs)
                     if show_errors:
-                        ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                        ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                                   fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
         else:
             df = (self.op_poissoned_data if self.op_poissoned_data is not None
                  else self.op_overlapped_data if self.op_overlapped_data is not None
                  else self.op_convolved_data if self.op_convolved_data is not None
                  else self.op_data)
+            # Convert time to ms for plotting
+            df_plot = df.copy()
+            df_plot['time'] = df_plot['time'] / 1000
             # Use pandas plot with step drawstyle
-            df.set_index('time')['counts'].plot(
+            df_plot.set_index('time')['counts'].plot(
                 ax=ax, drawstyle='steps-mid', label='Openbeam', **kwargs)
             if show_errors:
-                ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                           fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
 
         ax.set_xlabel('Time (ms)')
@@ -687,20 +716,26 @@ class Data:
                      (self.overlapped_data, 'Signal Overlapped'), (self.poissoned_data, 'Signal Poissoned')]
             for df, label in stages:
                 if df is not None:
-                    df.set_index('time')['counts'].plot(
+                    # Convert time to ms for plotting
+                    df_plot = df.copy()
+                    df_plot['time'] = df_plot['time'] / 1000
+                    df_plot.set_index('time')['counts'].plot(
                         ax=ax, drawstyle='steps-mid', label=label, alpha=0.7, **kwargs)
                     if show_errors:
-                        ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                        ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                                   fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
         else:
             sig = (self.poissoned_data if self.poissoned_data is not None
                   else self.overlapped_data if self.overlapped_data is not None
                   else self.convolved_data if self.convolved_data is not None
                   else self.data)
-            sig.set_index('time')['counts'].plot(
+            # Convert time to ms for plotting
+            sig_plot = sig.copy()
+            sig_plot['time'] = sig_plot['time'] / 1000
+            sig_plot.set_index('time')['counts'].plot(
                 ax=ax, drawstyle='steps-mid', label='Signal', alpha=0.7, **kwargs)
             if show_errors:
-                ax.errorbar(sig['time'], sig['counts'], yerr=sig['err'],
+                ax.errorbar(sig_plot['time'].values, sig_plot['counts'], yerr=sig_plot['err'],
                           fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
 
         # Plot openbeam if available
@@ -710,20 +745,26 @@ class Data:
                          (self.op_overlapped_data, 'Openbeam Overlapped'), (self.op_poissoned_data, 'Openbeam Poissoned')]
                 for df, label in stages:
                     if df is not None:
-                        df.set_index('time')['counts'].plot(
+                        # Convert time to ms for plotting
+                        df_plot = df.copy()
+                        df_plot['time'] = df_plot['time'] / 1000
+                        df_plot.set_index('time')['counts'].plot(
                             ax=ax, drawstyle='steps-mid', label=label, alpha=0.7, **kwargs)
                         if show_errors:
-                            ax.errorbar(df['time'], df['counts'], yerr=df['err'],
+                            ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                                       fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
             else:
                 op = (self.op_poissoned_data if self.op_poissoned_data is not None
                      else self.op_overlapped_data if self.op_overlapped_data is not None
                      else self.op_convolved_data if self.op_convolved_data is not None
                      else self.op_data)
-                op.set_index('time')['counts'].plot(
+                # Convert time to ms for plotting
+                op_plot = op.copy()
+                op_plot['time'] = op_plot['time'] / 1000
+                op_plot.set_index('time')['counts'].plot(
                     ax=ax, drawstyle='steps-mid', label='Openbeam', alpha=0.7, **kwargs)
                 if show_errors:
-                    ax.errorbar(op['time'], op['counts'], yerr=op['err'],
+                    ax.errorbar(op_plot['time'].values, op_plot['counts'], yerr=op_plot['err'],
                               fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
 
         ax.set_xlabel('Time (ms)')

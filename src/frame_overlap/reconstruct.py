@@ -97,9 +97,9 @@ class Reconstruct:
         if self.data.kernel is None:
             raise ValueError("Data object must have a kernel defined (call data.overlap first)")
 
-        # Store reference data if available (squared_data before overlap)
-        if self.data.squared_data is not None:
-            self.reference_table = self.data.squared_data.copy()
+        # Store reference data if available (convolved_data before overlap)
+        if self.data.convolved_data is not None:
+            self.reference_table = self.data.convolved_data.copy()
 
         kind = kind.lower()
 

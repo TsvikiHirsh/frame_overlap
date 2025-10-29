@@ -166,8 +166,8 @@ class Analysis:
                 openbeam = self.reconstruct.data.op_poissoned_data
             elif self.reconstruct.data.op_overlapped_data is not None:
                 openbeam = self.reconstruct.data.op_overlapped_data
-            elif self.reconstruct.data.op_squared_data is not None:
-                openbeam = self.reconstruct.data.op_squared_data
+            elif self.reconstruct.data.op_convolved_data is not None:
+                openbeam = self.reconstruct.data.op_convolved_data
             else:
                 openbeam = self.reconstruct.data.op_data
 
