@@ -351,7 +351,7 @@ class TestReconstructClass(unittest.TestCase):
         data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
         recon = Reconstruct(data)
         self.assertIsNotNone(recon.data)
-        self.assertIsNone(recon.reconstructed_table)
+        self.assertIsNone(recon.reconstructed_data)
 
     def test_reconstruct_filter_wiener(self):
         """Test Wiener filtering."""
@@ -359,7 +359,7 @@ class TestReconstructClass(unittest.TestCase):
         data.convolute_response(200).overlap(kernel=[0, 12, 10])  # 200 µs
         recon = Reconstruct(data)
         recon.filter(kind='wiener', noise_power=0.01)
-        self.assertIsNotNone(recon.reconstructed_table)
+        self.assertIsNotNone(recon.reconstructed_data)
         self.assertIn('chi2_per_dof', recon.statistics)
 
     def test_reconstruct_get_statistics(self):

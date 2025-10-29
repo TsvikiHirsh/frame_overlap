@@ -37,15 +37,25 @@ class Reconstruct:
 
     Examples
     --------
-    >>> from frame_overlap import Data, Reconstruct
-    >>> data = Data('signal.csv')
-    >>> data.convolute_response(200).overlap([0, 12, 10, 25])
+    >>> from frame_overlap import Data, Reconstruct, Model
+    >>> # Load and process data
+    >>> data = Data('signal.csv', 'openbeam.csv')
+    >>> data.convolute_response(200).overlap([0, 12, 10, 25]).poisson_sample(duty_cycle=0.8)
+    >>> # Reconstruct
     >>> recon = Reconstruct(data)
     >>> recon.filter(kind='wiener', noise_power=0.01)
-    >>> recon.plot()  # Default: transmission comparison
-    >>> recon.plot(kind='comparison')  # Counts comparison
-    >>> recon.plot(kind='residuals')  # Residuals plot
+    >>> # Plot with residuals
+    >>> recon.plot()  # Default: transmission with residuals
+    >>> recon.plot(kind='signal', ylim=(0, 1000), residual_ylim=(-5, 5))
+    >>> recon.plot(kind='transmission', color='indianred', residual_color='blue')
     >>> print(recon.statistics)
+    >>> # Fit with nbragg
+    >>> import nbragg
+    >>> xs = nbragg.CrossSection(iron=nbragg.materials["Fe_sg225_Iron-gamma"])
+    >>> result = nbragg.TransmissionModel(xs).fit(recon)  # recon.table is used
+    >>> # Or use simplified Model class
+    >>> model = Model(xs='iron_with_cellulose', vary_weights=True)
+    >>> result = model.fit(recon)
     """
 
     def __init__(self, data):
@@ -69,6 +79,18 @@ class Reconstruct:
         self.reconstructed_data = None
         self.reference_data = None  # Will store poissoned data for comparison
         self.statistics = {}
+
+    @property
+    def table(self):
+        """
+        Get reconstructed data as table for nbragg compatibility.
+
+        Returns
+        -------
+        pandas.DataFrame
+            Reconstructed data with columns: time, counts, err
+        """
+        return self.reconstructed_data
 
     def filter(self, kind='wiener', noise_power=0.01, **kwargs):
         """
@@ -310,7 +332,8 @@ class Reconstruct:
 
             # Calculate chi-squared
             residuals = reference - reconstructed
-            chi2 = np.sum((residuals / errors)**2)
+            errors_safe = np.maximum(errors, 1e-10)  # Avoid division by zero
+            chi2 = np.sum((residuals / errors_safe)**2)
             chi2_per_dof = chi2 / min_len
 
             # Calculate R-squared
@@ -354,27 +377,48 @@ class Reconstruct:
         """
         return self.statistics.copy()
 
-    def plot(self, kind='transmission', show_errors=True, fontsize=16, figsize=(10, 6), **kwargs):
+    def _format_chi2(self, chi2_val):
+        """Format chi2 value with 2 significant figures or scientific notation."""
+        if chi2_val is None:
+            return "N/A"
+
+        # Use scientific notation for very large or very small numbers
+        if abs(chi2_val) >= 1000 or (abs(chi2_val) < 0.01 and abs(chi2_val) > 0):
+            return f"{chi2_val:.2g}"
+        else:
+            # Round to 2 significant figures
+            if chi2_val == 0:
+                return "0.0"
+            from math import log10, floor
+            sig_figs = 2
+            rounded = round(chi2_val, -int(floor(log10(abs(chi2_val)))) + (sig_figs - 1))
+            return f"{rounded:.2f}" if rounded < 100 else f"{rounded:.0f}"
+
+    def plot(self, kind='transmission', show_errors=True, fontsize=16, figsize=(10, 8),
+             residual_height_ratio=0.3, **kwargs):
         """
-        Plot reconstruction results using pandas plotting methods.
+        Plot reconstruction results with data and residuals in subplots.
 
         Parameters
         ----------
         kind : str, optional
             Type of plot:
-            - 'transmission': Compare transmission of reconstructed vs convolved (default)
-            - 'comparison': Plot reconstructed and reference counts side-by-side
-            - 'reconstructed': Plot reconstructed signal only
-            - 'residuals': Plot residuals (reference - reconstructed)
-            - 'statistics': Plot statistical summary
+            - 'transmission': Compare transmission (default)
+            - 'signal': Compare signal counts
+            - 'openbeam': Compare openbeam counts
+            - 'statistics': Plot statistical summary (single plot)
         show_errors : bool, optional
             Whether to show error bars. Default is True.
         fontsize : int, optional
             Font size for labels, ticks, and legend. Default is 16.
         figsize : tuple, optional
-            Figure size (width, height) in inches. Default is (10, 6).
+            Figure size (width, height) in inches. Default is (10, 8).
+        residual_height_ratio : float, optional
+            Height ratio of residual plot to data plot. Default is 0.3.
         **kwargs
-            Additional keyword arguments passed to pandas plotting methods
+            Additional keyword arguments. Can use prefixes:
+            - No prefix: applies to data plot (e.g., ylim=(0,1), color='red')
+            - 'residual_': applies to residual plot (e.g., residual_ylim=(-5,5))
 
         Returns
         -------
@@ -389,8 +433,6 @@ class Reconstruct:
         if self.reconstructed_data is None:
             raise ValueError("No reconstruction available. Call filter() first.")
 
-        fig, ax = plt.subplots(figsize=figsize)
-
         # Set font sizes for all elements
         plt.rcParams.update({
             'font.size': fontsize,
@@ -401,25 +443,189 @@ class Reconstruct:
             'legend.fontsize': fontsize
         })
 
-        if kind == 'transmission':
-            self._plot_transmission(ax, show_errors, **kwargs)
-        elif kind == 'comparison':
-            self._plot_comparison(ax, show_errors, **kwargs)
-        elif kind == 'reconstructed':
-            self._plot_reconstructed(ax, show_errors, **kwargs)
-        elif kind == 'residuals':
-            self._plot_residuals(ax, show_errors, **kwargs)
-        elif kind == 'statistics':
+        # Statistics plot is a single plot
+        if kind == 'statistics':
+            fig, ax = plt.subplots(figsize=figsize)
             self._plot_statistics(ax)
-        else:
-            raise ValueError(f"Unknown kind '{kind}'. Choose from: 'transmission', 'comparison', "
-                           f"'reconstructed', 'residuals', 'statistics'")
+            plt.tight_layout()
+            return fig
 
-        ax.grid(True, alpha=0.3)
-        if kind != 'statistics':
-            ax.legend()
+        # Separate kwargs for data and residual plots
+        data_kwargs = {}
+        residual_kwargs = {}
+        for key, value in kwargs.items():
+            if key.startswith('residual_'):
+                residual_kwargs[key.replace('residual_', '')] = value
+            else:
+                data_kwargs[key] = value
+
+        # Create subplots with shared x-axis
+        fig = plt.figure(figsize=figsize)
+        gs = fig.add_gridspec(2, 1, height_ratios=[1, residual_height_ratio], hspace=0.05)
+        ax_data = fig.add_subplot(gs[0])
+        ax_resid = fig.add_subplot(gs[1], sharex=ax_data)
+
+        if kind == 'transmission':
+            self._plot_transmission_with_residuals(ax_data, ax_resid, show_errors,
+                                                   data_kwargs, residual_kwargs)
+        elif kind == 'signal':
+            self._plot_signal_with_residuals(ax_data, ax_resid, show_errors,
+                                            data_kwargs, residual_kwargs)
+        elif kind == 'openbeam':
+            self._plot_openbeam_with_residuals(ax_data, ax_resid, show_errors,
+                                              data_kwargs, residual_kwargs)
+        else:
+            raise ValueError(f"Unknown kind '{kind}'. Choose from: 'transmission', 'signal', "
+                           f"'openbeam', 'statistics'")
+
+        # Hide x-axis labels on upper plot
+        ax_data.tick_params(labelbottom=False)
+
+        # Add grid
+        ax_data.grid(True, alpha=0.3)
+        ax_resid.grid(True, alpha=0.3)
+
         plt.tight_layout()
         return fig
+
+    def _plot_transmission_with_residuals(self, ax_data, ax_resid, show_errors, data_kwargs, residual_kwargs):
+        """Plot transmission comparison with residuals below."""
+        if self.reference_data is None:
+            raise ValueError("No reference data available for transmission comparison.")
+
+        # Get openbeam data
+        if self.data.op_poissoned_data is not None:
+            ref_openbeam_data = self.data.op_poissoned_data
+        elif self.data.op_overlapped_data is not None:
+            ref_openbeam_data = self.data.op_overlapped_data
+        else:
+            raise ValueError("No openbeam data available for transmission calculation.")
+
+        # Match lengths
+        min_len = min(len(self.reference_data), len(self.reconstructed_data), len(ref_openbeam_data))
+
+        # Calculate transmissions
+        ref_signal = self.reference_data['counts'].values[:min_len]
+        recon_signal = self.reconstructed_data['counts'].values[:min_len]
+        ref_openbeam = ref_openbeam_data['counts'].values[:min_len]
+
+        ref_transmission = ref_signal / np.maximum(ref_openbeam, 1)
+        recon_transmission = recon_signal / np.maximum(ref_openbeam, 1)
+
+        time_ms = self.reference_data['time'].values[:min_len] / 1000
+
+        # Plot data
+        ref_df = pd.DataFrame({'time': time_ms, 'transmission': ref_transmission})
+        recon_df = pd.DataFrame({'time': time_ms, 'transmission': recon_transmission})
+
+        # Extract color for both plots if provided
+        data_color = data_kwargs.pop('color', None)
+        ref_df.set_index('time')['transmission'].plot(
+            ax=ax_data, drawstyle='steps-mid', label='Poissoned', alpha=0.7,
+            color=data_color, **data_kwargs)
+        recon_df.set_index('time')['transmission'].plot(
+            ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **data_kwargs)
+
+        # Error bars
+        if show_errors:
+            ref_signal_err = self.reference_data['err'].values[:min_len]
+            ref_openbeam_err = ref_openbeam_data['err'].values[:min_len]
+            recon_signal_err = self.reconstructed_data['err'].values[:min_len]
+
+            ref_signal_safe = np.maximum(np.abs(ref_signal), 1)
+            ref_openbeam_safe = np.maximum(np.abs(ref_openbeam), 1)
+            recon_signal_safe = np.maximum(np.abs(recon_signal), 1)
+
+            ref_trans_err = np.abs(ref_transmission) * np.sqrt(
+                (ref_signal_err / ref_signal_safe)**2 + (ref_openbeam_err / ref_openbeam_safe)**2)
+            recon_trans_err = np.abs(recon_transmission) * np.sqrt(
+                (recon_signal_err / recon_signal_safe)**2 + (ref_openbeam_err / ref_openbeam_safe)**2)
+
+            ax_data.errorbar(time_ms, ref_transmission, yerr=np.abs(ref_trans_err),
+                           fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
+            ax_data.errorbar(time_ms, recon_transmission, yerr=np.abs(recon_trans_err),
+                           fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
+
+        # Calculate residuals in sigma units: (reconstructed - poisson) / poisson_err
+        ref_trans_err_safe = np.maximum(np.abs(ref_trans_err) if show_errors else 1, 1e-10)
+        residuals_sigma = (recon_transmission - ref_transmission) / ref_trans_err_safe
+
+        # Plot residuals
+        residual_color = residual_kwargs.pop('color', 'black')
+        resid_df = pd.DataFrame({'time': time_ms, 'residuals': residuals_sigma})
+        resid_df.set_index('time')['residuals'].plot(
+            ax=ax_resid, drawstyle='steps-mid', color=residual_color, **residual_kwargs)
+        ax_resid.axhline(0, color='red', linestyle='--', alpha=0.5, linewidth=1)
+
+        # Labels and title
+        ax_data.set_ylabel('Transmission')
+        ax_resid.set_xlabel('Time (ms)')
+        ax_resid.set_ylabel('Residuals (σ)')
+
+        # Add chi2 to legend title
+        chi2_val = self.statistics.get('chi2_per_dof', None)
+        chi2_str = self._format_chi2(chi2_val)
+        ax_data.legend(title=f'χ²/dof = {chi2_str}')
+
+    def _plot_signal_with_residuals(self, ax_data, ax_resid, show_errors, data_kwargs, residual_kwargs):
+        """Plot signal comparison with residuals below."""
+        if self.reference_data is None:
+            raise ValueError("No reference data available.")
+
+        # Match lengths
+        min_len = min(len(self.reference_data), len(self.reconstructed_data))
+
+        ref_counts = self.reference_data['counts'].values[:min_len]
+        recon_counts = self.reconstructed_data['counts'].values[:min_len]
+        ref_err = self.reference_data['err'].values[:min_len]
+        time_ms = self.reference_data['time'].values[:min_len] / 1000
+
+        # Plot data
+        ref_df = pd.DataFrame({'time': time_ms, 'counts': ref_counts})
+        recon_df = pd.DataFrame({'time': time_ms, 'counts': recon_counts})
+
+        data_color = data_kwargs.pop('color', None)
+        ref_df.set_index('time')['counts'].plot(
+            ax=ax_data, drawstyle='steps-mid', label='Poissoned', alpha=0.7,
+            color=data_color, **data_kwargs)
+        recon_df.set_index('time')['counts'].plot(
+            ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **data_kwargs)
+
+        # Error bars
+        if show_errors:
+            recon_err = self.reconstructed_data['err'].values[:min_len]
+            ax_data.errorbar(time_ms, ref_counts, yerr=ref_err,
+                           fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
+            ax_data.errorbar(time_ms, recon_counts, yerr=recon_err,
+                           fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
+
+        # Calculate residuals in sigma units
+        ref_err_safe = np.maximum(ref_err, 1e-10)
+        residuals_sigma = (recon_counts - ref_counts) / ref_err_safe
+
+        # Plot residuals
+        residual_color = residual_kwargs.pop('color', 'black')
+        resid_df = pd.DataFrame({'time': time_ms, 'residuals': residuals_sigma})
+        resid_df.set_index('time')['residuals'].plot(
+            ax=ax_resid, drawstyle='steps-mid', color=residual_color, **residual_kwargs)
+        ax_resid.axhline(0, color='red', linestyle='--', alpha=0.5, linewidth=1)
+
+        # Labels and title
+        ax_data.set_ylabel('Signal Counts')
+        ax_resid.set_xlabel('Time (ms)')
+        ax_resid.set_ylabel('Residuals (σ)')
+
+        # Add chi2 to legend title
+        chi2_val = self.statistics.get('chi2_per_dof', None)
+        chi2_str = self._format_chi2(chi2_val)
+        ax_data.legend(title=f'χ²/dof = {chi2_str}')
+
+    def _plot_openbeam_with_residuals(self, ax_data, ax_resid, show_errors, data_kwargs, residual_kwargs):
+        """Plot openbeam comparison with residuals below."""
+        # This plots the reconstructed openbeam if available
+        # For now, we'll raise an error as openbeam reconstruction isn't standard
+        raise NotImplementedError("Openbeam reconstruction plotting is not yet implemented. "
+                                "Use kind='signal' or kind='transmission' instead.")
 
     def _plot_transmission(self, ax, show_errors, **kwargs):
         """Plot transmission comparison (reconstructed vs poissoned reference) using pandas plotting."""
