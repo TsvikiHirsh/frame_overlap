@@ -465,7 +465,7 @@ class Data:
             print(f"  Time ratio: {measurement_time}/{self.duration} = {measurement_time/self.duration:.4f}")
             print(f"  Freq ratio: {freq}/{self.freq} = {freq/self.freq:.4f}")
 
-        if not 0 < duty_cycle <= 10:  # Allow duty_cycle > 1 for higher flux scenarios
+        if not 0 < duty_cycle:  # Allow duty_cycle > 1 for higher flux scenarios
             raise ValueError("duty_cycle must be positive (typically between 0 and 1, but can exceed 1)")
 
         # Apply Poisson to signal

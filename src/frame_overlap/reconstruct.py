@@ -28,10 +28,10 @@ class Reconstruct:
     ----------
     data : Data
         Reference to the input Data object
-    reconstructed_table : pandas.DataFrame
-        Table with reconstructed signal (time, counts, err)
-    reference_table : pandas.DataFrame
-        Reference data for comparison (data after convolution but before overlap)
+    reconstructed_data : pandas.DataFrame
+        DataFrame with reconstructed signal (time, counts, err)
+    reference_data : pandas.DataFrame
+        Reference data for comparison (poissoned data before reconstruction)
     statistics : dict
         Dictionary containing reconstruction quality statistics
 
@@ -42,7 +42,9 @@ class Reconstruct:
     >>> data.convolute_response(200).overlap([0, 12, 10, 25])
     >>> recon = Reconstruct(data)
     >>> recon.filter(kind='wiener', noise_power=0.01)
-    >>> recon.plot_comparison()
+    >>> recon.plot()  # Default: transmission comparison
+    >>> recon.plot(kind='comparison')  # Counts comparison
+    >>> recon.plot(kind='residuals')  # Residuals plot
     >>> print(recon.statistics)
     """
 
@@ -64,8 +66,8 @@ class Reconstruct:
             raise ValueError("Data object must have loaded data")
 
         self.data = data
-        self.reconstructed_table = None
-        self.reference_table = None  # Will store pre-overlap data for comparison
+        self.reconstructed_data = None
+        self.reference_data = None  # Will store poissoned data for comparison
         self.statistics = {}
 
     def filter(self, kind='wiener', noise_power=0.01, **kwargs):
@@ -97,9 +99,12 @@ class Reconstruct:
         if self.data.kernel is None:
             raise ValueError("Data object must have a kernel defined (call data.overlap first)")
 
-        # Store reference data if available (convolved_data before overlap)
-        if self.data.convolved_data is not None:
-            self.reference_table = self.data.convolved_data.copy()
+        # Store reference data if available (poissoned_data is the data we want to reconstruct to)
+        if self.data.poissoned_data is not None:
+            self.reference_data = self.data.poissoned_data.copy()
+        elif self.data.overlapped_data is not None:
+            # If no poisson sampling was done, use overlapped data as reference
+            self.reference_data = self.data.overlapped_data.copy()
 
         kind = kind.lower()
 
@@ -113,8 +118,8 @@ class Reconstruct:
             raise ValueError(f"Unknown filter kind '{kind}'. "
                            f"Choose from: 'wiener', 'lucy', 'tikhonov'")
 
-        # Create reconstructed table
-        self.reconstructed_table = pd.DataFrame({
+        # Create reconstructed data
+        self.reconstructed_data = pd.DataFrame({
             'time': self.data.table['time'].values,
             'counts': reconstructed,
             'err': np.sqrt(np.maximum(reconstructed, 1))
@@ -292,16 +297,16 @@ class Reconstruct:
 
     def _calculate_statistics(self):
         """Calculate reconstruction quality statistics."""
-        if self.reconstructed_table is None:
+        if self.reconstructed_data is None:
             return
 
-        # If we have reference data (convolved but not overlapped)
-        if self.reference_table is not None:
+        # If we have reference data (poissoned data before reconstruction)
+        if self.reference_data is not None:
             # Match lengths
-            min_len = min(len(self.reference_table), len(self.reconstructed_table))
-            reference = self.reference_table['counts'].values[:min_len]
-            reconstructed = self.reconstructed_table['counts'].values[:min_len]
-            errors = self.reference_table['err'].values[:min_len]
+            min_len = min(len(self.reference_data), len(self.reconstructed_data))
+            reference = self.reference_data['counts'].values[:min_len]
+            reconstructed = self.reconstructed_data['counts'].values[:min_len]
+            errors = self.reference_data['err'].values[:min_len]
 
             # Calculate chi-squared
             residuals = reference - reconstructed
@@ -329,7 +334,7 @@ class Reconstruct:
             }
         else:
             # Without reference, just calculate basic statistics
-            reconstructed = self.reconstructed_table['counts'].values
+            reconstructed = self.reconstructed_data['counts'].values
             self.statistics = {
                 'mean': reconstructed.mean(),
                 'std': reconstructed.std(),
@@ -349,76 +354,27 @@ class Reconstruct:
         """
         return self.statistics.copy()
 
-    def plot_reconstruction(self):
+    def plot(self, kind='transmission', show_errors=True, fontsize=16, figsize=(10, 6), **kwargs):
         """
-        Plot the reconstructed signal.
+        Plot reconstruction results using pandas plotting methods.
 
-        Returns
-        -------
-        matplotlib.figure.Figure
-            The created figure
-        """
-        if self.reconstructed_table is None:
-            raise ValueError("No reconstruction available. Call filter() first.")
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        ax.plot(self.reconstructed_table['time'],
-               self.reconstructed_table['counts'],
-               'o-', label='Reconstructed', alpha=0.7)
-
-        ax.set_xlabel('Time (µs)')
-        ax.set_ylabel('Counts')
-        ax.set_title('Reconstructed Signal')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        return fig
-
-    def plot_comparison(self):
-        """
-        Plot comparison between reference (if available) and reconstructed signal.
-
-        Returns
-        -------
-        matplotlib.figure.Figure
-            The created figure
-        """
-        if self.reconstructed_table is None:
-            raise ValueError("No reconstruction available. Call filter() first.")
-
-        fig, ax = plt.subplots(figsize=(10, 6))
-
-        # Plot reconstructed
-        ax.plot(self.reconstructed_table['time'],
-               self.reconstructed_table['counts'],
-               'r-', label='Reconstructed', alpha=0.7, linewidth=2)
-
-        # Plot reference if available
-        if self.reference_table is not None:
-            ax.plot(self.reference_table['time'],
-                   self.reference_table['counts'],
-                   'b--', label='Reference (Pre-overlap)', alpha=0.7, linewidth=2)
-
-            # Add statistics to title
-            if 'chi2_per_dof' in self.statistics:
-                ax.set_title(f'Reconstruction Comparison (χ²/dof = {self.statistics["chi2_per_dof"]:.3f}, '
-                           f'R² = {self.statistics["r_squared"]:.3f})')
-        else:
-            ax.set_title('Reconstructed Signal')
-
-        ax.set_xlabel('Time (µs)')
-        ax.set_ylabel('Counts')
-        ax.legend()
-        ax.grid(True, alpha=0.3)
-
-        plt.tight_layout()
-        return fig
-
-    def plot_residuals(self):
-        """
-        Plot residuals between reference and reconstructed signal.
+        Parameters
+        ----------
+        kind : str, optional
+            Type of plot:
+            - 'transmission': Compare transmission of reconstructed vs convolved (default)
+            - 'comparison': Plot reconstructed and reference counts side-by-side
+            - 'reconstructed': Plot reconstructed signal only
+            - 'residuals': Plot residuals (reference - reconstructed)
+            - 'statistics': Plot statistical summary
+        show_errors : bool, optional
+            Whether to show error bars. Default is True.
+        fontsize : int, optional
+            Font size for labels, ticks, and legend. Default is 16.
+        figsize : tuple, optional
+            Figure size (width, height) in inches. Default is (10, 6).
+        **kwargs
+            Additional keyword arguments passed to pandas plotting methods
 
         Returns
         -------
@@ -428,43 +384,214 @@ class Reconstruct:
         Raises
         ------
         ValueError
-            If reference data is not available
+            If reconstruction has not been performed yet
         """
-        if self.reconstructed_table is None:
+        if self.reconstructed_data is None:
             raise ValueError("No reconstruction available. Call filter() first.")
 
-        if self.reference_table is None:
-            raise ValueError("No reference data available for residual calculation.")
+        fig, ax = plt.subplots(figsize=figsize)
 
-        # Match lengths
-        min_len = min(len(self.reference_table), len(self.reconstructed_table))
-        reference = self.reference_table['counts'].values[:min_len]
-        reconstructed = self.reconstructed_table['counts'].values[:min_len]
-        time = self.reference_table['time'].values[:min_len]
-        residuals = reference - reconstructed
+        # Set font sizes for all elements
+        plt.rcParams.update({
+            'font.size': fontsize,
+            'axes.labelsize': fontsize,
+            'axes.titlesize': fontsize + 2,
+            'xtick.labelsize': fontsize,
+            'ytick.labelsize': fontsize,
+            'legend.fontsize': fontsize
+        })
 
-        fig, ax = plt.subplots(figsize=(10, 6))
+        if kind == 'transmission':
+            self._plot_transmission(ax, show_errors, **kwargs)
+        elif kind == 'comparison':
+            self._plot_comparison(ax, show_errors, **kwargs)
+        elif kind == 'reconstructed':
+            self._plot_reconstructed(ax, show_errors, **kwargs)
+        elif kind == 'residuals':
+            self._plot_residuals(ax, show_errors, **kwargs)
+        elif kind == 'statistics':
+            self._plot_statistics(ax)
+        else:
+            raise ValueError(f"Unknown kind '{kind}'. Choose from: 'transmission', 'comparison', "
+                           f"'reconstructed', 'residuals', 'statistics'")
 
-        ax.plot(time, residuals, 'k-', alpha=0.7)
-        ax.axhline(0, color='r', linestyle='--', alpha=0.5)
-
-        ax.set_xlabel('Time (µs)')
-        ax.set_ylabel('Residuals (Reference - Reconstructed)')
-        ax.set_title(f'Residuals (RMSE = {self.statistics.get("rmse", 0):.2f})')
         ax.grid(True, alpha=0.3)
-
+        if kind != 'statistics':
+            ax.legend()
         plt.tight_layout()
         return fig
 
-    def plot_statistics(self):
-        """
-        Plot statistical summary of the reconstruction quality.
+    def _plot_transmission(self, ax, show_errors, **kwargs):
+        """Plot transmission comparison (reconstructed vs poissoned reference) using pandas plotting."""
+        if self.reference_data is None:
+            raise ValueError("No reference data available for transmission comparison. "
+                           "Reference data is stored from poissoned_data or overlapped_data.")
 
-        Returns
-        -------
-        matplotlib.figure.Figure
-            The created figure
-        """
+        # Get openbeam data from the Data object (use same stage as signal reference)
+        # If we have poissoned signal, use poissoned openbeam; otherwise use overlapped openbeam
+        if self.data.op_poissoned_data is not None:
+            ref_openbeam_data = self.data.op_poissoned_data
+        elif self.data.op_overlapped_data is not None:
+            ref_openbeam_data = self.data.op_overlapped_data
+        else:
+            raise ValueError("No openbeam data available for transmission calculation.")
+
+        # Calculate transmissions
+        # Match lengths for comparison
+        min_len = min(len(self.reference_data), len(self.reconstructed_data),
+                     len(ref_openbeam_data))
+
+        # Reference transmission (poissoned signal / poissoned openbeam)
+        ref_signal = self.reference_data['counts'].values[:min_len]
+        ref_openbeam = ref_openbeam_data['counts'].values[:min_len]
+        ref_transmission = ref_signal / np.maximum(ref_openbeam, 1)
+
+        # Reconstructed transmission
+        recon_signal = self.reconstructed_data['counts'].values[:min_len]
+        recon_transmission = recon_signal / np.maximum(ref_openbeam, 1)
+
+        # Time array (convert to ms)
+        time_ms = self.reference_data['time'].values[:min_len] / 1000
+
+        # Create DataFrames for plotting
+        ref_df = pd.DataFrame({'time': time_ms, 'transmission': ref_transmission})
+        recon_df = pd.DataFrame({'time': time_ms, 'transmission': recon_transmission})
+
+        # Use pandas plot with step drawstyle
+        ref_df.set_index('time')['transmission'].plot(
+            ax=ax, drawstyle='steps-mid', label='Poissoned (Reference)', alpha=0.7, **kwargs)
+        recon_df.set_index('time')['transmission'].plot(
+            ax=ax, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **kwargs)
+
+        # Add error bars if requested
+        if show_errors:
+            # Propagate errors for transmission
+            ref_signal_err = self.reference_data['err'].values[:min_len]
+            ref_openbeam_err = ref_openbeam_data['err'].values[:min_len]
+
+            # Avoid division by zero and ensure positive errors
+            ref_signal_safe = np.maximum(np.abs(ref_signal), 1)
+            ref_openbeam_safe = np.maximum(np.abs(ref_openbeam), 1)
+
+            ref_trans_err = np.abs(ref_transmission) * np.sqrt(
+                (ref_signal_err / ref_signal_safe)**2 +
+                (ref_openbeam_err / ref_openbeam_safe)**2
+            )
+
+            recon_signal_err = self.reconstructed_data['err'].values[:min_len]
+            recon_signal_safe = np.maximum(np.abs(recon_signal), 1)
+
+            recon_trans_err = np.abs(recon_transmission) * np.sqrt(
+                (recon_signal_err / recon_signal_safe)**2 +
+                (ref_openbeam_err / ref_openbeam_safe)**2
+            )
+
+            # Ensure errors are positive
+            ref_trans_err = np.abs(ref_trans_err)
+            recon_trans_err = np.abs(recon_trans_err)
+
+            ax.errorbar(time_ms, ref_transmission, yerr=ref_trans_err,
+                       fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
+            ax.errorbar(time_ms, recon_transmission, yerr=recon_trans_err,
+                       fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
+
+        ax.set_xlabel('Time (ms)')
+        ax.set_ylabel('Transmission')
+
+        # Add statistics to title if available
+        if 'chi2_per_dof' in self.statistics:
+            ax.set_title(f'Transmission Comparison (χ²/dof = {self.statistics["chi2_per_dof"]:.3f}, '
+                       f'R² = {self.statistics["r_squared"]:.3f})')
+        else:
+            ax.set_title('Transmission Comparison')
+
+    def _plot_comparison(self, ax, show_errors, **kwargs):
+        """Plot counts comparison (reconstructed vs reference) using pandas plotting."""
+        # Convert time to ms for plotting
+        recon_plot = self.reconstructed_data.copy()
+        recon_plot['time'] = recon_plot['time'] / 1000
+
+        # Use pandas plot with step drawstyle
+        recon_plot.set_index('time')['counts'].plot(
+            ax=ax, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **kwargs)
+
+        # Add error bars
+        if show_errors:
+            ax.errorbar(recon_plot['time'].values, recon_plot['counts'].values,
+                       yerr=recon_plot['err'].values, fmt='none', ecolor='0.5',
+                       capsize=2, alpha=0.5)
+
+        # Plot reference if available
+        if self.reference_data is not None:
+            ref_plot = self.reference_data.copy()
+            ref_plot['time'] = ref_plot['time'] / 1000
+
+            ref_plot.set_index('time')['counts'].plot(
+                ax=ax, drawstyle='steps-mid', label='Reference (Poissoned)', alpha=0.7, **kwargs)
+
+            if show_errors:
+                ax.errorbar(ref_plot['time'].values, ref_plot['counts'].values,
+                           yerr=ref_plot['err'].values, fmt='none', ecolor='0.5',
+                           capsize=2, alpha=0.5)
+
+            # Add statistics to title
+            if 'chi2_per_dof' in self.statistics:
+                ax.set_title(f'Counts Comparison (χ²/dof = {self.statistics["chi2_per_dof"]:.3f}, '
+                           f'R² = {self.statistics["r_squared"]:.3f})')
+        else:
+            ax.set_title('Reconstructed Signal')
+
+        ax.set_xlabel('Time (ms)')
+        ax.set_ylabel('Counts')
+
+    def _plot_reconstructed(self, ax, show_errors, **kwargs):
+        """Plot reconstructed signal only using pandas plotting."""
+        # Convert time to ms for plotting
+        recon_plot = self.reconstructed_data.copy()
+        recon_plot['time'] = recon_plot['time'] / 1000
+
+        # Use pandas plot with step drawstyle
+        recon_plot.set_index('time')['counts'].plot(
+            ax=ax, drawstyle='steps-mid', label='Reconstructed', **kwargs)
+
+        # Add error bars
+        if show_errors:
+            ax.errorbar(recon_plot['time'].values, recon_plot['counts'].values,
+                       yerr=recon_plot['err'].values, fmt='none', ecolor='0.5',
+                       capsize=2, alpha=0.5)
+
+        ax.set_xlabel('Time (ms)')
+        ax.set_ylabel('Counts')
+        ax.set_title('Reconstructed Signal')
+
+    def _plot_residuals(self, ax, show_errors, **kwargs):
+        """Plot residuals (reference - reconstructed) using pandas plotting."""
+        if self.reference_data is None:
+            raise ValueError("No reference data available for residual calculation.")
+
+        # Match lengths
+        min_len = min(len(self.reference_data), len(self.reconstructed_data))
+        reference = self.reference_data['counts'].values[:min_len]
+        reconstructed = self.reconstructed_data['counts'].values[:min_len]
+        time_ms = self.reference_data['time'].values[:min_len] / 1000
+        residuals = reference - reconstructed
+
+        # Create DataFrame for plotting
+        resid_df = pd.DataFrame({'time': time_ms, 'residuals': residuals})
+
+        # Use pandas plot with step drawstyle
+        resid_df.set_index('time')['residuals'].plot(
+            ax=ax, drawstyle='steps-mid', label='Residuals', **kwargs)
+
+        # Add zero line
+        ax.axhline(0, color='r', linestyle='--', alpha=0.5)
+
+        ax.set_xlabel('Time (ms)')
+        ax.set_ylabel('Residuals (Reference - Reconstructed)')
+        ax.set_title(f'Residuals (RMSE = {self.statistics.get("rmse", 0):.2f})')
+
+    def _plot_statistics(self, ax):
+        """Plot statistical summary as a bar chart."""
         if not self.statistics:
             raise ValueError("No statistics available. Call filter() first.")
 
@@ -474,8 +601,6 @@ class Reconstruct:
 
         if not plot_stats:
             raise ValueError("No plottable statistics available.")
-
-        fig, ax = plt.subplots(figsize=(10, 6))
 
         bars = ax.bar(range(len(plot_stats)), list(plot_stats.values()))
         ax.set_xticks(range(len(plot_stats)))
@@ -490,12 +615,9 @@ class Reconstruct:
             ax.text(bar.get_x() + bar.get_width()/2., height,
                    f'{value:.3f}', ha='center', va='bottom', fontsize=9)
 
-        plt.tight_layout()
-        return fig
-
     def __repr__(self):
         """String representation of the Reconstruct object."""
-        has_recon = self.reconstructed_table is not None
+        has_recon = self.reconstructed_data is not None
         chi2_dof = self.statistics.get('chi2_per_dof', None)
         return (f"Reconstruct(reconstructed={has_recon}, "
                 f"chi2_per_dof={chi2_dof:.3f if chi2_dof is not None else 'N/A'})")
