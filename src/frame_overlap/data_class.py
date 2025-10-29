@@ -480,8 +480,14 @@ class Data:
                               'o-', label=label, alpha=0.7, **kwargs)
         else:
             # Show current stage only
-            sig = self.poissoned_data or self.overlapped_data or self.squared_data or self.data
-            op = self.op_poissoned_data or self.op_overlapped_data or self.op_squared_data or self.op_data
+            sig = (self.poissoned_data if self.poissoned_data is not None
+                  else self.overlapped_data if self.overlapped_data is not None
+                  else self.squared_data if self.squared_data is not None
+                  else self.data)
+            op = (self.op_poissoned_data if self.op_poissoned_data is not None
+                 else self.op_overlapped_data if self.op_overlapped_data is not None
+                 else self.op_squared_data if self.op_squared_data is not None
+                 else self.op_data)
 
             if sig is not None and op is not None:
                 trans = self._calculate_transmission(sig, op)
@@ -517,7 +523,10 @@ class Data:
                     else:
                         ax.plot(df['time'], df['counts'], 'o-', label=label, alpha=0.7)
         else:
-            df = self.poissoned_data or self.overlapped_data or self.squared_data or self.data
+            df = (self.poissoned_data if self.poissoned_data is not None
+                 else self.overlapped_data if self.overlapped_data is not None
+                 else self.squared_data if self.squared_data is not None
+                 else self.data)
             if show_errors:
                 ax.errorbar(df['time'], df['counts'], yerr=df['err'],
                           fmt='o-', capsize=3, label='Signal', **kwargs)
@@ -548,7 +557,10 @@ class Data:
                     else:
                         ax.plot(df['time'], df['counts'], 's-', label=label, alpha=0.7)
         else:
-            df = self.op_poissoned_data or self.op_overlapped_data or self.op_squared_data or self.op_data
+            df = (self.op_poissoned_data if self.op_poissoned_data is not None
+                 else self.op_overlapped_data if self.op_overlapped_data is not None
+                 else self.op_squared_data if self.op_squared_data is not None
+                 else self.op_data)
             if show_errors:
                 ax.errorbar(df['time'], df['counts'], yerr=df['err'],
                           fmt='s-', capsize=3, label='Openbeam', **kwargs)
@@ -572,7 +584,10 @@ class Data:
                 if df is not None:
                     ax.plot(df['time'], df['counts'], 'o-', label=label, alpha=0.7)
         else:
-            sig = self.poissoned_data or self.overlapped_data or self.squared_data or self.data
+            sig = (self.poissoned_data if self.poissoned_data is not None
+                  else self.overlapped_data if self.overlapped_data is not None
+                  else self.squared_data if self.squared_data is not None
+                  else self.data)
             ax.plot(sig['time'], sig['counts'], 'o-', label='Signal', alpha=0.7)
 
         # Plot openbeam if available
@@ -584,7 +599,10 @@ class Data:
                     if df is not None:
                         ax.plot(df['time'], df['counts'], 's-', label=label, alpha=0.7)
             else:
-                op = self.op_poissoned_data or self.op_overlapped_data or self.op_squared_data or self.op_data
+                op = (self.op_poissoned_data if self.op_poissoned_data is not None
+                     else self.op_overlapped_data if self.op_overlapped_data is not None
+                     else self.op_squared_data if self.op_squared_data is not None
+                     else self.op_data)
                 ax.plot(op['time'], op['counts'], 's-', label='Openbeam', alpha=0.7)
 
         ax.set_xlabel('Time (µs)', fontsize=plt.rcParams['font.size'])
