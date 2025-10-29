@@ -378,11 +378,12 @@ class TestReconstructClass(unittest.TestCase):
         recon = Reconstruct(data)
         recon.filter(kind='wiener')
         try:
-            fig = recon.plot_reconstruction()
+            # Test the new unified plot() method
+            fig = recon.plot(kind='reconstructed')
             self.assertIsNotNone(fig)
             plt.close(fig)  # Close to avoid display
         except Exception as e:
-            self.fail(f"plot_reconstruction() raised {type(e).__name__}: {str(e)}")
+            self.fail(f"plot() raised {type(e).__name__}: {str(e)}")
 
 
 class TestAnalysisClass(unittest.TestCase):
