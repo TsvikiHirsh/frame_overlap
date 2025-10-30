@@ -284,36 +284,44 @@ class Reconstruct:
         """
         Reconstruct the convolution kernel from the frame overlap sequence.
 
+        The kernel represents the overlap operation as a convolution.
+        For frame overlap, each frame contributes a delta function at its start position.
+
         Returns
         -------
         np.ndarray
-            The kernel array
+            The kernel array (delta functions at frame start positions)
         """
         if self.data.kernel is None:
             raise ValueError("Kernel not defined in Data object")
 
-        # Create a simple rectangular kernel based on the overlap sequence
-        # This is a simplified version - you may need to adjust based on your needs
-        seq = np.array(self.data.kernel) * 100  # Convert ms to 10µs bins
-        n_frames = len(seq)
+        # Get bin width from the data (in µs)
+        if len(self.data.table) > 1:
+            bin_width = self.data.table['time'].iloc[1] - self.data.table['time'].iloc[0]
+        else:
+            bin_width = 10  # Default 10 µs
 
-        # Create kernel with rectangular pulses
-        kernel_length = int(seq.sum()) + 100  # Add some buffer
+        # Convert kernel from ms to µs and then to bins
+        kernel_us = np.array(self.data.kernel) * 1000  # ms to µs
+        frame_starts_us = np.cumsum(kernel_us)  # Cumulative positions
+
+        # Convert to bin indices
+        frame_starts_bins = np.round(frame_starts_us / bin_width).astype(int)
+
+        # Create kernel with delta functions at frame start positions
+        # The kernel length should cover all frame starts
+        if len(frame_starts_bins) > 0:
+            kernel_length = max(frame_starts_bins[-1] + 1, 1)
+        else:
+            kernel_length = 1
+
         kernel = np.zeros(kernel_length)
 
-        # Add rectangular pulses at the specified positions
-        cumulative = 0
-        pulse_width = 20  # Default pulse width in bins
-        for i, delay in enumerate(seq):
-            start = int(cumulative)
-            end = start + pulse_width
-            if end < len(kernel):
-                kernel[start:end] = 1.0 / n_frames
-            cumulative += delay
-
-        # Normalize kernel
-        if kernel.sum() > 0:
-            kernel = kernel / kernel.sum()
+        # Place delta functions (value = 1/n_frames for normalization)
+        n_frames = len(self.data.kernel)
+        for bin_idx in frame_starts_bins:
+            if bin_idx < len(kernel):
+                kernel[bin_idx] = 1.0 / n_frames
 
         return kernel
 

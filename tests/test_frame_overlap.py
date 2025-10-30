@@ -378,8 +378,8 @@ class TestReconstructClass(unittest.TestCase):
         recon = Reconstruct(data)
         recon.filter(kind='wiener')
         try:
-            # Test the new unified plot() method
-            fig = recon.plot(kind='reconstructed')
+            # Test the new unified plot() method (default is transmission with residuals)
+            fig = recon.plot(kind='signal')
             self.assertIsNotNone(fig)
             plt.close(fig)  # Close to avoid display
         except Exception as e:
