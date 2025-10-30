@@ -87,8 +87,10 @@ class Reconstruct:
             raise ValueError("Data object must have loaded data")
 
         self.data = data
-        self.reconstructed_data = None
-        self.reference_data = None  # Will store poissoned data for comparison
+        self.reconstructed_data = None  # Reconstructed signal
+        self.reconstructed_openbeam = None  # Reconstructed openbeam (NEW)
+        self.reference_data = None  # Reference signal for comparison
+        self.reference_openbeam = None  # Reference openbeam for comparison (NEW)
         self.statistics = {}
         self.tmin = tmin  # Time range for chi2 calculation (in ms)
         self.tmax = tmax
@@ -110,7 +112,9 @@ class Reconstruct:
         Convert reconstructed data to nbragg Data format.
 
         This creates an nbragg.Data object from the reconstructed signal and
-        reference openbeam, which is required for fitting with nbragg.
+        reconstructed openbeam DataFrames. Both signal and openbeam are
+        reconstructed independently, then nbragg calculates transmission and
+        uncertainties.
 
         Parameters
         ----------
@@ -129,7 +133,7 @@ class Reconstruct:
         ImportError
             If nbragg is not installed
         ValueError
-            If openbeam data is not available
+            If reconstructed data is not available
 
         Examples
         --------
@@ -137,6 +141,12 @@ class Reconstruct:
         >>> nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
         >>> xs = nbragg.CrossSection(iron=nbragg.materials["Fe_sg225_Iron-gamma"])
         >>> result = nbragg.TransmissionModel(xs).fit(nbragg_data)
+
+        Notes
+        -----
+        nbragg.Data.from_counts expects DataFrames with columns (time, counts, err).
+        It will calculate transmission = signal/openbeam with proper uncertainty
+        propagation, then convert time-of-flight to wavelength using L and tstep.
         """
         try:
             import nbragg
@@ -149,21 +159,17 @@ class Reconstruct:
         if self.reconstructed_data is None:
             raise ValueError("No reconstructed data available. Call filter() first.")
 
-        # Get appropriate openbeam data (same stage as signal reference)
-        # NEW WORKFLOW: Use op_poissoned_data if available (matches new reference)
-        if self.data.op_poissoned_data is not None:
-            openbeam = self.data.op_poissoned_data
-        elif self.data.op_convolved_data is not None:
-            openbeam = self.data.op_convolved_data
-        elif self.data.op_data is not None:
-            openbeam = self.data.op_data
-        else:
-            raise ValueError("No openbeam data available for nbragg conversion.")
+        if self.reconstructed_openbeam is None:
+            raise ValueError(
+                "No reconstructed openbeam available. "
+                "Ensure openbeam data was loaded and processed through the same pipeline."
+            )
 
-        # Convert using nbragg.Data.from_counts
+        # Pass both reconstructed signal and reconstructed openbeam to nbragg
+        # nbragg will calculate transmission and uncertainties
         return nbragg.Data.from_counts(
             self.reconstructed_data,
-            openbeam,
+            self.reconstructed_openbeam,
             L=L,
             tstep=tstep
         )
@@ -293,36 +299,65 @@ class Reconstruct:
             raise ValueError("Data object must have a kernel defined (call data.overlap first)")
 
         # Store reference data: the signal BEFORE overlap
-        # NEW WORKFLOW: Data → Poisson → Convolute → Overlap
-        # Reference should be poissoned+convolved data (if available), before overlap
+        # WORKFLOW: Data → Convolute → Poisson → Overlap
+        # Reference should be poissoned data (if available), before overlap
         if self.data.poissoned_data is not None:
-            # NEW: If Poisson was applied before overlap (recommended workflow)
             self.reference_data = self.data.poissoned_data.copy()
         elif self.data.convolved_data is not None:
-            # OLD: If only convolution was done
             self.reference_data = self.data.convolved_data.copy()
         else:
-            # Fallback: use original data
             self.reference_data = self.data.data.copy() if self.data.data is not None else None
+
+        # Store reference openbeam: openbeam BEFORE overlap
+        if self.data.op_poissoned_data is not None:
+            self.reference_openbeam = self.data.op_poissoned_data.copy()
+        elif self.data.op_convolved_data is not None:
+            self.reference_openbeam = self.data.op_convolved_data.copy()
+        else:
+            self.reference_openbeam = self.data.op_data.copy() if self.data.op_data is not None else None
 
         kind = kind.lower()
 
+        # Reconstruct signal
         if kind == 'wiener':
-            reconstructed = self._wiener_filter(noise_power, **kwargs)
+            reconstructed_signal = self._wiener_filter(noise_power, **kwargs)
         elif kind == 'lucy' or kind == 'richardson-lucy':
-            reconstructed = self._lucy_richardson_filter(**kwargs)
+            reconstructed_signal = self._lucy_richardson_filter(**kwargs)
         elif kind == 'tikhonov':
-            reconstructed = self._tikhonov_filter(noise_power, **kwargs)
+            reconstructed_signal = self._tikhonov_filter(noise_power, **kwargs)
         else:
             raise ValueError(f"Unknown filter kind '{kind}'. "
                            f"Choose from: 'wiener', 'lucy', 'tikhonov'")
 
-        # Create reconstructed data
+        # Create reconstructed signal DataFrame
         self.reconstructed_data = pd.DataFrame({
             'time': self.data.table['time'].values,
-            'counts': reconstructed,
-            'err': np.sqrt(np.maximum(reconstructed, 1))
+            'counts': reconstructed_signal,
+            'err': np.sqrt(np.maximum(reconstructed_signal, 1))
         })
+
+        # Reconstruct openbeam if available
+        if self.data.op_overlapped_data is not None:
+            # Temporarily swap data to reconstruct openbeam
+            original_table = self.data.table
+            self.data.table = self.data.op_overlapped_data
+
+            if kind == 'wiener':
+                reconstructed_ob = self._wiener_filter(noise_power, **kwargs)
+            elif kind == 'lucy' or kind == 'richardson-lucy':
+                reconstructed_ob = self._lucy_richardson_filter(**kwargs)
+            elif kind == 'tikhonov':
+                reconstructed_ob = self._tikhonov_filter(noise_power, **kwargs)
+
+            # Restore original table
+            self.data.table = original_table
+
+            # Create reconstructed openbeam DataFrame
+            self.reconstructed_openbeam = pd.DataFrame({
+                'time': self.data.op_overlapped_data['time'].values,
+                'counts': reconstructed_ob,
+                'err': np.sqrt(np.maximum(reconstructed_ob, 1))
+            })
 
         # Calculate statistics
         self._calculate_statistics()

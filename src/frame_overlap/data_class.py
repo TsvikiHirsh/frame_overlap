@@ -643,12 +643,12 @@ class Data:
             raise ValueError("Both signal and openbeam data must be loaded for transmission plot")
 
         if show_stages:
-            # Show all stages
+            # Show all stages in CORRECT order: Original → Convolved → Poissoned → Overlapped
             stages = [
                 (self.data, self.op_data, 'Original'),
                 (self.convolved_data, self.op_convolved_data, 'Convolved'),
-                (self.overlapped_data, self.op_overlapped_data, 'Overlapped'),
-                (self.poissoned_data, self.op_poissoned_data, 'Poissoned')
+                (self.poissoned_data, self.op_poissoned_data, 'Poissoned'),
+                (self.overlapped_data, self.op_overlapped_data, 'Overlapped')
             ]
 
             for sig, op, label in stages:
@@ -698,11 +698,12 @@ class Data:
             raise ValueError("No signal data loaded")
 
         if show_stages:
+            # CORRECT order: Original → Convolved → Poissoned → Overlapped
             stages = [
                 (self.data, 'Original'),
                 (self.convolved_data, 'Convolved'),
-                (self.overlapped_data, 'Overlapped'),
-                (self.poissoned_data, 'Poissoned')
+                (self.poissoned_data, 'Poissoned'),
+                (self.overlapped_data, 'Overlapped')
             ]
             for df, label in stages:
                 if df is not None:
@@ -740,11 +741,12 @@ class Data:
             raise ValueError("No openbeam data loaded")
 
         if show_stages:
+            # CORRECT order: Original → Convolved → Poissoned → Overlapped
             stages = [
                 (self.op_data, 'Original'),
                 (self.op_convolved_data, 'Convolved'),
-                (self.op_overlapped_data, 'Overlapped'),
-                (self.op_poissoned_data, 'Poissoned')
+                (self.op_poissoned_data, 'Poissoned'),
+                (self.op_overlapped_data, 'Overlapped')
             ]
             for df, label in stages:
                 if df is not None:
@@ -783,8 +785,9 @@ class Data:
 
         # Plot signal
         if show_stages:
+            # CORRECT order: Original → Convolved → Poissoned → Overlapped
             stages = [(self.data, 'Signal Original'), (self.convolved_data, 'Signal Convolved'),
-                     (self.overlapped_data, 'Signal Overlapped'), (self.poissoned_data, 'Signal Poissoned')]
+                     (self.poissoned_data, 'Signal Poissoned'), (self.overlapped_data, 'Signal Overlapped')]
             for df, label in stages:
                 if df is not None:
                     # Convert time to ms for plotting
@@ -812,8 +815,9 @@ class Data:
         # Plot openbeam if available
         if self.op_data is not None:
             if show_stages:
+                # CORRECT order: Original → Convolved → Poissoned → Overlapped
                 stages = [(self.op_data, 'Openbeam Original'), (self.op_convolved_data, 'Openbeam Convolved'),
-                         (self.op_overlapped_data, 'Openbeam Overlapped'), (self.op_poissoned_data, 'Openbeam Poissoned')]
+                         (self.op_poissoned_data, 'Openbeam Poissoned'), (self.op_overlapped_data, 'Openbeam Overlapped')]
                 for df, label in stages:
                     if df is not None:
                         # Convert time to ms for plotting
