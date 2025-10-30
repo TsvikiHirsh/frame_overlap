@@ -164,12 +164,14 @@ class Reconstruct:
                 "No reconstructed openbeam available. "
                 "Ensure openbeam data was loaded and processed through the same pipeline."
             )
+        
+        # remove negative values from reconstruction
 
         # Pass both reconstructed signal and reconstructed openbeam to nbragg
         # nbragg will calculate transmission and uncertainties
         return nbragg.Data.from_counts(
-            self.reconstructed_data,
-            self.reconstructed_openbeam,
+            self.reconstructed_data.drop("time",axis=1).clip(lower=0).reset_index(),
+            self.reconstructed_openbeam.drop("time",axis=1).clip(lower=0).reset_index(),
             L=L,
             tstep=tstep
         )
