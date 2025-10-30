@@ -361,8 +361,10 @@ class Workflow:
 
         for value in iterator:
             try:
-                # Reload data for each iteration
-                data = Data(self.signal_path, self.openbeam_path)
+                # Reload data for each iteration with original parameters
+                data = Data(self.signal_path, self.openbeam_path,
+                           flux=self.data.flux, duration=self.data.duration,
+                           freq=self.data.freq)
 
                 # Re-apply all previous steps up to sweep point
                 # This is determined by which parameter is being swept
