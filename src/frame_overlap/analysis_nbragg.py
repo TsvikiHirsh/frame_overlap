@@ -21,6 +21,7 @@ class Analysis:
     ----------
     xs : str or object, optional
         Cross-section specification. Can be:
+        - 'iron': Simple Fe_sg229_Iron-alpha (use with vary_background=True, vary_response=True)
         - 'iron_with_cellulose': Iron with cellulose background
         - 'iron_square_response': Iron with square response function
         - nbragg.CrossSection object: Custom cross-section
@@ -52,9 +53,14 @@ class Analysis:
     >>> recon = Reconstruct(data)
     >>> recon.filter(kind='wiener', noise_power=0.01)
     >>>
-    >>> # Fit with predefined cross-section
-    >>> analysis = Analysis(xs='iron_square_response', vary_background=True)
+    >>> # Fit with 'iron' model (recommended)
+    >>> analysis = Analysis(xs='iron', vary_background=True, vary_response=True)
     >>> analysis.model.params  # Access nbragg model parameters
+    >>> result = analysis.fit(recon)
+    >>> result.plot()
+    >>>
+    >>> # Or use 'iron_square_response'
+    >>> analysis = Analysis(xs='iron_square_response', vary_background=True)
     >>> result = analysis.fit(recon)
     >>>
     >>> # Or use custom cross-section
@@ -71,13 +77,17 @@ class Analysis:
         Parameters
         ----------
         xs : str or object
-            Cross-section specification
+            Cross-section specification. Available predefined options:
+            - 'iron': Simple Fe_sg229_Iron-alpha (use with vary_background=True, vary_response=True)
+            - 'iron_square_response': Iron with square response
+            - 'iron_with_cellulose': Iron with cellulose background
         vary_weights : bool
             Whether to vary material weights
         vary_background : bool
             Whether to vary background
         **kwargs
-            Additional arguments for nbragg.TransmissionModel
+            Additional arguments for nbragg.TransmissionModel, including:
+            - vary_response: Whether to vary response function (e.g., for 'iron' model)
         """
         try:
             import nbragg
@@ -125,10 +135,12 @@ class Analysis:
             return self._iron_with_cellulose()
         elif name == 'iron_square_response':
             return self._iron_square_response()
+        elif name == 'iron':
+            return self._iron()
         else:
             raise ValueError(
                 f"Unknown predefined cross-section '{name}'. "
-                f"Choose from: 'iron_with_cellulose', 'iron_square_response'"
+                f"Choose from: 'iron_with_cellulose', 'iron_square_response', 'iron'"
             )
 
     def _iron_with_cellulose(self):
@@ -169,6 +181,30 @@ class Analysis:
         except Exception as e:
             raise ValueError(
                 f"Failed to create iron_square_response cross-section: {e}"
+            )
+
+    def _iron(self):
+        """
+        Create simple iron alpha cross-section.
+
+        This creates a CrossSection using Fe_sg229_Iron-alpha.ncmat
+        which is suitable for fitting with vary_background=True and vary_response=True.
+
+        Usage
+        -----
+        >>> analysis = Analysis(xs='iron', vary_background=True, vary_response=True)
+        >>> result = analysis.fit(recon)
+        >>> result.plot()
+        """
+        try:
+            # Use Fe_sg229_Iron-alpha as specified by user
+            iron = "Fe_sg229_Iron-alpha.ncmat"
+
+            return self.nbragg.CrossSection(iron=iron)
+        except Exception as e:
+            raise ValueError(
+                f"Failed to create iron cross-section: {e}. "
+                f"Make sure 'Fe_sg229_Iron-alpha.ncmat' is available in nbragg."
             )
 
     def fit(self, recon, L=9.0, tstep=10e-6, **fit_kwargs):
