@@ -70,7 +70,7 @@ class Analysis:
     >>> result = analysis.fit(recon)
     """
 
-    def __init__(self, xs='iron_square_response', vary_weights=False, vary_background=True, **kwargs):
+    def __init__(self, xs='iron', vary_weights=False, vary_background=True, **kwargs):
         """
         Initialize Analysis with cross-section specification.
 
