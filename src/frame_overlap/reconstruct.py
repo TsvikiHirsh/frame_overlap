@@ -16,13 +16,20 @@ class Reconstruct:
     Reconstruct/Filter object for signal deconvolution and reconstruction.
 
     This class applies various filtering techniques (e.g., Wiener filter) to
-    reconstruct the original signal from processed data. It provides statistical
-    methods to quantify reconstruction quality and plotting methods for visualization.
+    reconstruct the original signal from overlapped frame data.
+
+    **Workflow**: Data → Convolute → Overlap → [Poisson] → Reconstruct
+
+    The reconstruction aims to recover the **convolved** signal (before overlap),
+    not the raw original data. This makes physical sense because:
+    - The convolution represents the instrument response (unavoidable)
+    - The overlap is the operation we want to undo (recoverable via deconvolution)
+    - Poisson sampling (if applied) adds noise to the overlapped signal
 
     Parameters
     ----------
     data : Data
-        Data object containing the signal to be reconstructed
+        Data object containing the overlapped signal to be reconstructed
 
     Attributes
     ----------
@@ -31,7 +38,7 @@ class Reconstruct:
     reconstructed_data : pandas.DataFrame
         DataFrame with reconstructed signal (time, counts, err)
     reference_data : pandas.DataFrame
-        Reference data for comparison (poissoned data before reconstruction)
+        Reference data for comparison (convolved signal BEFORE overlap - this is the target)
     statistics : dict
         Dictionary containing reconstruction quality statistics
 
@@ -121,12 +128,13 @@ class Reconstruct:
         if self.data.kernel is None:
             raise ValueError("Data object must have a kernel defined (call data.overlap first)")
 
-        # Store reference data if available (poissoned_data is the data we want to reconstruct to)
-        if self.data.poissoned_data is not None:
-            self.reference_data = self.data.poissoned_data.copy()
-        elif self.data.overlapped_data is not None:
-            # If no poisson sampling was done, use overlapped data as reference
-            self.reference_data = self.data.overlapped_data.copy()
+        # Store reference data: the convolved signal BEFORE overlap
+        # This is what we're trying to reconstruct
+        if self.data.convolved_data is not None:
+            self.reference_data = self.data.convolved_data.copy()
+        else:
+            # If no convolution was done, use original data
+            self.reference_data = self.data.data.copy() if self.data.data is not None else None
 
         kind = kind.lower()
 
@@ -529,7 +537,7 @@ class Reconstruct:
         # Extract color for both plots if provided
         data_color = data_kwargs.pop('color', None)
         ref_df.set_index('time')['transmission'].plot(
-            ax=ax_data, drawstyle='steps-mid', label='Poissoned', alpha=0.7,
+            ax=ax_data, drawstyle='steps-mid', label='Convolved (Target)', alpha=0.7,
             color=data_color, **data_kwargs)
         recon_df.set_index('time')['transmission'].plot(
             ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **data_kwargs)
@@ -594,7 +602,7 @@ class Reconstruct:
 
         data_color = data_kwargs.pop('color', None)
         ref_df.set_index('time')['counts'].plot(
-            ax=ax_data, drawstyle='steps-mid', label='Poissoned', alpha=0.7,
+            ax=ax_data, drawstyle='steps-mid', label='Convolved (Target)', alpha=0.7,
             color=data_color, **data_kwargs)
         recon_df.set_index('time')['counts'].plot(
             ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **data_kwargs)

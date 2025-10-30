@@ -224,7 +224,10 @@ class Model:
     def __repr__(self):
         """String representation of the Model object."""
         has_result = self.result is not None
-        chi2 = self.result.redchi if has_result else None
+        if has_result:
+            chi2_str = f"{self.result.redchi:.3f}"
+        else:
+            chi2_str = "N/A"
         return (f"Model(xs={self.xs.__class__.__name__}, "
                 f"fitted={has_result}, "
-                f"chi2={chi2:.3f if chi2 is not None else 'N/A'})")
+                f"chi2={chi2_str})")
