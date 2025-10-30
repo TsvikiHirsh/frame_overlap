@@ -65,7 +65,7 @@ class Reconstruct:
     >>> result = model.fit(recon)
     """
 
-    def __init__(self, data):
+    def __init__(self, data, tmin=None, tmax=None):
         """
         Initialize Reconstruct object with a Data object.
 
@@ -73,6 +73,10 @@ class Reconstruct:
         ----------
         data : Data
             Data object to be reconstructed
+        tmin : float, optional
+            Minimum time (in ms) for chi2 calculation range. Default is None (use full range).
+        tmax : float, optional
+            Maximum time (in ms) for chi2 calculation range. Default is None (use full range).
         """
         from .data_class import Data
 
@@ -86,6 +90,8 @@ class Reconstruct:
         self.reconstructed_data = None
         self.reference_data = None  # Will store poissoned data for comparison
         self.statistics = {}
+        self.tmin = tmin  # Time range for chi2 calculation (in ms)
+        self.tmax = tmax
 
     @property
     def table(self):
@@ -98,6 +104,164 @@ class Reconstruct:
             Reconstructed data with columns: time, counts, err
         """
         return self.reconstructed_data
+
+    def to_nbragg(self, L=9.0, tstep=10e-6):
+        """
+        Convert reconstructed data to nbragg Data format.
+
+        This creates an nbragg.Data object from the reconstructed signal and
+        reference openbeam, which is required for fitting with nbragg.
+
+        Parameters
+        ----------
+        L : float, optional
+            Flight path length in meters. Default is 9.0 m.
+        tstep : float, optional
+            Time step in seconds. Default is 10e-6 s (10 µs).
+
+        Returns
+        -------
+        nbragg.Data
+            Data object ready for use with nbragg.TransmissionModel.fit()
+
+        Raises
+        ------
+        ImportError
+            If nbragg is not installed
+        ValueError
+            If openbeam data is not available
+
+        Examples
+        --------
+        >>> recon = Reconstruct(data).filter(kind='wiener')
+        >>> nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
+        >>> xs = nbragg.CrossSection(iron=nbragg.materials["Fe_sg225_Iron-gamma"])
+        >>> result = nbragg.TransmissionModel(xs).fit(nbragg_data)
+        """
+        try:
+            import nbragg
+        except ImportError:
+            raise ImportError(
+                "nbragg is required for to_nbragg(). "
+                "Install with: pip install nbragg"
+            )
+
+        if self.reconstructed_data is None:
+            raise ValueError("No reconstructed data available. Call filter() first.")
+
+        # Get appropriate openbeam data (same stage as signal reference)
+        # NEW WORKFLOW: Use op_poissoned_data if available (matches new reference)
+        if self.data.op_poissoned_data is not None:
+            openbeam = self.data.op_poissoned_data
+        elif self.data.op_convolved_data is not None:
+            openbeam = self.data.op_convolved_data
+        elif self.data.op_data is not None:
+            openbeam = self.data.op_data
+        else:
+            raise ValueError("No openbeam data available for nbragg conversion.")
+
+        # Convert using nbragg.Data.from_counts
+        return nbragg.Data.from_counts(
+            self.reconstructed_data,
+            openbeam,
+            L=L,
+            tstep=tstep
+        )
+
+    def optimize_noise(self, kind='wiener', noise_min=1e-4, noise_max=1.0, method='leastsq', **kwargs):
+        """
+        Automatically find optimal noise_power parameter using lmfit.
+
+        This method scans different noise_power values to minimize chi-squared,
+        then applies the filter with the optimal value.
+
+        Parameters
+        ----------
+        kind : str, optional
+            Filter type ('wiener', 'lucy', 'tikhonov'). Default is 'wiener'.
+        noise_min : float, optional
+            Minimum noise_power to try. Default is 1e-4.
+        noise_max : float, optional
+            Maximum noise_power to try. Default is 1.0.
+        method : str, optional
+            Optimization method for lmfit. Default is 'leastsq'.
+        **kwargs
+            Additional arguments passed to filter()
+
+        Returns
+        -------
+        lmfit.MinimizerResult
+            Optimization result with best-fit noise_power and statistics
+
+        Examples
+        --------
+        >>> recon = Reconstruct(data)
+        >>> result = recon.optimize_noise(kind='wiener')
+        >>> print(f"Optimal noise_power: {result.params['noise_power'].value}")
+        >>> print(f"Chi-squared: {result.chisqr}")
+        """
+        try:
+            import lmfit
+        except ImportError:
+            raise ImportError(
+                "lmfit is required for optimize_noise(). "
+                "Install with: pip install lmfit"
+            )
+
+        if self.reference_data is None:
+            raise ValueError("No reference data available for optimization.")
+
+        # Define objective function: chi-squared
+        def objective(params):
+            noise_power = params['noise_power'].value
+
+            # Apply filter with this noise_power
+            self.filter(kind=kind, noise_power=noise_power, **kwargs)
+
+            # Calculate residuals weighted by errors, using tmin/tmax range if specified
+            min_len = min(len(self.reference_data), len(self.reconstructed_data))
+
+            # Get time array and apply time range filter
+            time_us = self.reference_data['time'].values[:min_len]
+            time_ms = time_us / 1000.0
+
+            mask = np.ones(min_len, dtype=bool)
+            if self.tmin is not None:
+                mask &= (time_ms >= self.tmin)
+            if self.tmax is not None:
+                mask &= (time_ms <= self.tmax)
+
+            # Get filtered data
+            reference = self.reference_data['counts'].values[:min_len][mask]
+            reconstructed = self.reconstructed_data['counts'].values[:min_len][mask]
+            errors = self.reference_data['err'].values[:min_len][mask]
+            errors_safe = np.maximum(errors, 1e-10)
+
+            # Return residuals (lmfit will minimize sum of squares)
+            return (reference - reconstructed) / errors_safe
+
+        # Set up parameter
+        params = lmfit.Parameters()
+        params.add('noise_power', value=np.sqrt(noise_min * noise_max),
+                   min=noise_min, max=noise_max)
+
+        # Run minimization
+        print(f"Optimizing noise_power for {kind} filter...")
+        print(f"  Range: [{noise_min:.2e}, {noise_max:.2e}]")
+
+        minimizer = lmfit.Minimizer(objective, params)
+        result = minimizer.minimize(method=method)
+
+        # Apply final filter with optimal value
+        optimal_noise = result.params['noise_power'].value
+        self.filter(kind=kind, noise_power=optimal_noise, **kwargs)
+
+        print(f"\nOptimization complete!")
+        print(f"  Optimal noise_power: {optimal_noise:.4e}")
+        print(f"  Chi-squared: {result.chisqr:.2f}")
+        print(f"  Reduced chi-squared: {result.redchi:.2f}")
+
+        return result
 
     def filter(self, kind='wiener', noise_power=0.01, **kwargs):
         """
@@ -128,12 +292,17 @@ class Reconstruct:
         if self.data.kernel is None:
             raise ValueError("Data object must have a kernel defined (call data.overlap first)")
 
-        # Store reference data: the convolved signal BEFORE overlap
-        # This is what we're trying to reconstruct
-        if self.data.convolved_data is not None:
+        # Store reference data: the signal BEFORE overlap
+        # NEW WORKFLOW: Data → Poisson → Convolute → Overlap
+        # Reference should be poissoned+convolved data (if available), before overlap
+        if self.data.poissoned_data is not None:
+            # NEW: If Poisson was applied before overlap (recommended workflow)
+            self.reference_data = self.data.poissoned_data.copy()
+        elif self.data.convolved_data is not None:
+            # OLD: If only convolution was done
             self.reference_data = self.data.convolved_data.copy()
         else:
-            # If no convolution was done, use original data
+            # Fallback: use original data
             self.reference_data = self.data.data.copy() if self.data.data is not None else None
 
         kind = kind.lower()
@@ -334,7 +503,7 @@ class Reconstruct:
         return kernel
 
     def _calculate_statistics(self):
-        """Calculate reconstruction quality statistics."""
+        """Calculate reconstruction quality statistics using tmin/tmax range if specified."""
         if self.reconstructed_data is None:
             return
 
@@ -342,15 +511,29 @@ class Reconstruct:
         if self.reference_data is not None:
             # Match lengths
             min_len = min(len(self.reference_data), len(self.reconstructed_data))
-            reference = self.reference_data['counts'].values[:min_len]
-            reconstructed = self.reconstructed_data['counts'].values[:min_len]
-            errors = self.reference_data['err'].values[:min_len]
 
-            # Calculate chi-squared
+            # Get time array (in µs) and convert to ms for comparison
+            time_us = self.reference_data['time'].values[:min_len]
+            time_ms = time_us / 1000.0
+
+            # Apply time range filter if tmin/tmax specified
+            mask = np.ones(min_len, dtype=bool)
+            if self.tmin is not None:
+                mask &= (time_ms >= self.tmin)
+            if self.tmax is not None:
+                mask &= (time_ms <= self.tmax)
+
+            # Get filtered data
+            reference = self.reference_data['counts'].values[:min_len][mask]
+            reconstructed = self.reconstructed_data['counts'].values[:min_len][mask]
+            errors = self.reference_data['err'].values[:min_len][mask]
+            n_points = len(reference)
+
+            # Calculate chi-squared only on filtered range
             residuals = reference - reconstructed
             errors_safe = np.maximum(errors, 1e-10)  # Avoid division by zero
             chi2 = np.sum((residuals / errors_safe)**2)
-            chi2_per_dof = chi2 / min_len
+            chi2_per_dof = chi2 / n_points if n_points > 0 else 0
 
             # Calculate R-squared
             ss_res = np.sum(residuals**2)
@@ -358,7 +541,7 @@ class Reconstruct:
             r_squared = 1 - (ss_res / ss_tot) if ss_tot > 0 else 0
 
             # Calculate RMSE
-            rmse = np.sqrt(np.mean(residuals**2))
+            rmse = np.sqrt(np.mean(residuals**2)) if n_points > 0 else 0
 
             # Calculate normalized RMSE
             nrmse = rmse / (reference.max() - reference.min()) if (reference.max() - reference.min()) > 0 else 0
@@ -369,7 +552,9 @@ class Reconstruct:
                 'r_squared': r_squared,
                 'rmse': rmse,
                 'nrmse': nrmse,
-                'n_points': min_len
+                'n_points': n_points,
+                'tmin': self.tmin,
+                'tmax': self.tmax
             }
         else:
             # Without reference, just calculate basic statistics
@@ -583,6 +768,14 @@ class Reconstruct:
         chi2_str = self._format_chi2(chi2_val)
         ax_data.legend(title=f'χ²/dof = {chi2_str}')
 
+        # Add vertical indicators for tmin/tmax if specified
+        if self.tmin is not None:
+            ax_data.axvline(self.tmin, color='green', linestyle=':', alpha=0.6, linewidth=2, label=f'tmin={self.tmin}')
+            ax_resid.axvline(self.tmin, color='green', linestyle=':', alpha=0.6, linewidth=2)
+        if self.tmax is not None:
+            ax_data.axvline(self.tmax, color='orange', linestyle=':', alpha=0.6, linewidth=2, label=f'tmax={self.tmax}')
+            ax_resid.axvline(self.tmax, color='orange', linestyle=':', alpha=0.6, linewidth=2)
+
     def _plot_signal_with_residuals(self, ax_data, ax_resid, show_errors, data_kwargs, residual_kwargs):
         """Plot signal comparison with residuals below."""
         if self.reference_data is None:
@@ -635,6 +828,14 @@ class Reconstruct:
         chi2_val = self.statistics.get('chi2_per_dof', None)
         chi2_str = self._format_chi2(chi2_val)
         ax_data.legend(title=f'χ²/dof = {chi2_str}')
+
+        # Add vertical indicators for tmin/tmax if specified
+        if self.tmin is not None:
+            ax_data.axvline(self.tmin, color='green', linestyle=':', alpha=0.6, linewidth=2, label=f'tmin={self.tmin}')
+            ax_resid.axvline(self.tmin, color='green', linestyle=':', alpha=0.6, linewidth=2)
+        if self.tmax is not None:
+            ax_data.axvline(self.tmax, color='orange', linestyle=':', alpha=0.6, linewidth=2, label=f'tmax={self.tmax}')
+            ax_resid.axvline(self.tmax, color='orange', linestyle=':', alpha=0.6, linewidth=2)
 
     def _plot_openbeam_with_residuals(self, ax_data, ax_resid, show_errors, data_kwargs, residual_kwargs):
         """Plot openbeam comparison with residuals below."""

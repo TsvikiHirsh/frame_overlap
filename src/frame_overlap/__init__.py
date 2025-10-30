@@ -24,8 +24,8 @@ The package also provides backward-compatible functional API:
 # New object-oriented API
 from .data_class import Data
 from .reconstruct import Reconstruct
-from .analysis_class import Analysis, CrossSection
-from .model_class import Model
+from .analysis_nbragg import Analysis
+from .analysis_class import Analysis as LegacyAnalysis, CrossSection
 from .groupby import ParametricScan, compare_configurations
 
 # Legacy functional API (for backward compatibility)
@@ -39,8 +39,8 @@ __all__ = [
     'Data',
     'Reconstruct',
     'Analysis',
+    'LegacyAnalysis',
     'CrossSection',
-    'Model',
     'ParametricScan',
     'compare_configurations',
 

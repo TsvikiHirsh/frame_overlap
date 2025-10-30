@@ -1,20 +1,21 @@
 """
-Model class for nbragg integration with frame_overlap reconstruction.
+Analysis class for nbragg integration with frame_overlap reconstruction.
 
 This module provides a simplified interface to nbragg for fitting transmission
 models to reconstructed data.
 """
 
-import numpy as np
+import numpy as pd
 import pandas as pd
 
 
-class Model:
+class Analysis:
     """
-    Model class for fitting transmission models to reconstructed data.
+    Analysis class for fitting transmission models to reconstructed data.
 
-    This class provides a simplified interface to nbragg.TransmissionModel,
-    with predefined cross-section configurations and automatic setup.
+    This class provides a simplified interface to nbragg for fitting,
+    with predefined cross-section configurations and easy access to
+    the underlying nbragg objects.
 
     Parameters
     ----------
@@ -33,34 +34,39 @@ class Model:
 
     Attributes
     ----------
+    xs : nbragg.CrossSection
+        The cross-section object
     model : nbragg.TransmissionModel
         The underlying nbragg transmission model
+    data : nbragg.Data or None
+        The nbragg Data object after calling fit()
     result : lmfit.ModelResult or None
         Fitting result after calling fit()
 
     Examples
     --------
-    >>> from frame_overlap import Data, Reconstruct, Model
+    >>> from frame_overlap import Data, Reconstruct, Analysis
     >>> # Create and reconstruct data
     >>> data = Data('signal.csv', 'openbeam.csv')
-    >>> data.convolute_response(200).overlap([0, 12, 10, 25]).poisson_sample(duty_cycle=0.8)
+    >>> data.convolute_response(200).overlap([0, 25]).poisson_sample(duty_cycle=0.8)
     >>> recon = Reconstruct(data)
     >>> recon.filter(kind='wiener', noise_power=0.01)
     >>>
-    >>> # Fit with predefined model
-    >>> model = Model(xs='iron_with_cellulose', vary_weights=True)
-    >>> result = model.fit(recon)
+    >>> # Fit with predefined cross-section
+    >>> analysis = Analysis(xs='iron_square_response', vary_background=True)
+    >>> analysis.model.params  # Access nbragg model parameters
+    >>> result = analysis.fit(recon)
     >>>
     >>> # Or use custom cross-section
     >>> import nbragg
     >>> xs = nbragg.CrossSection(iron=nbragg.materials["Fe_sg225_Iron-gamma"])
-    >>> model = Model(xs=xs, vary_background=True)
-    >>> result = model.fit(recon)
+    >>> analysis = Analysis(xs=xs, vary_background=True)
+    >>> result = analysis.fit(recon)
     """
 
-    def __init__(self, xs='iron_with_cellulose', vary_weights=False, vary_background=True, **kwargs):
+    def __init__(self, xs='iron_square_response', vary_weights=False, vary_background=True, **kwargs):
         """
-        Initialize Model with cross-section specification.
+        Initialize Analysis with cross-section specification.
 
         Parameters
         ----------
@@ -77,7 +83,7 @@ class Model:
             import nbragg
         except ImportError:
             raise ImportError(
-                "nbragg is required for Model class. "
+                "nbragg is required for Analysis class. "
                 "Install with: pip install nbragg"
             )
 
@@ -86,6 +92,7 @@ class Model:
         self.vary_background = vary_background
         self.kwargs = kwargs
         self.result = None
+        self.data = None  # Will store nbragg.Data after fit()
 
         # Setup cross-section
         if isinstance(xs, str):
@@ -164,7 +171,7 @@ class Model:
                 f"Failed to create iron_square_response cross-section: {e}"
             )
 
-    def fit(self, recon, **fit_kwargs):
+    def fit(self, recon, L=9.0, tstep=10e-6, **fit_kwargs):
         """
         Fit the model to reconstructed data.
 
@@ -172,6 +179,10 @@ class Model:
         ----------
         recon : Reconstruct
             Reconstruct object with reconstructed_data
+        L : float, optional
+            Flight path length in meters. Default is 9.0 m.
+        tstep : float, optional
+            Time step in seconds. Default is 10e-6 s (10 µs).
         **fit_kwargs
             Additional keyword arguments passed to model.fit()
 
@@ -191,9 +202,11 @@ class Model:
                 "Call recon.filter() before fitting."
             )
 
-        # nbragg expects a Data-like object with table attribute
-        # We can use recon directly since it has table property
-        self.result = self.model.fit(recon, **fit_kwargs)
+        # Convert reconstructed data to nbragg format
+        self.data = recon.to_nbragg(L=L, tstep=tstep)
+
+        # Fit using nbragg
+        self.result = self.model.fit(self.data, **fit_kwargs)
 
         return self.result
 
@@ -222,12 +235,12 @@ class Model:
         return self.result.plot(**kwargs)
 
     def __repr__(self):
-        """String representation of the Model object."""
+        """String representation of the Analysis object."""
         has_result = self.result is not None
         if has_result:
             chi2_str = f"{self.result.redchi:.3f}"
         else:
             chi2_str = "N/A"
-        return (f"Model(xs={self.xs.__class__.__name__}, "
+        return (f"Analysis(xs={self.xs.__class__.__name__}, "
                 f"fitted={has_result}, "
                 f"chi2={chi2_str})")

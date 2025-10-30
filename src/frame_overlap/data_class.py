@@ -262,12 +262,17 @@ class Data:
         })
         return result
 
-    def overlap(self, kernel, total_time=None, freq=None, bin_width=10):
+    def overlap(self, kernel, total_time=None, freq=None, bin_width=10, poisson_seed=None):
         """
         Create overlapping frame structure.
 
         This method duplicates the data into multiple frames with specified time
         delays. Applies to both signal and openbeam.
+
+        **OPTIONAL SECOND POISSON**: If `poisson_seed` is provided, a second Poisson
+        sampling with duty_cycle=1.0 will be applied AFTER overlap to add randomness
+        to the overlapped signal. This is useful when you've already applied Poisson
+        sampling before overlap (recommended workflow).
 
         Parameters
         ----------
@@ -287,6 +292,9 @@ class Data:
             For example, freq=20 Hz means total_time=50 ms.
         bin_width : float, optional
             Time bin width in microseconds. Default is 10 µs.
+        poisson_seed : int, optional
+            If provided, apply a second Poisson sampling (duty_cycle=1.0) after overlap
+            using this seed. This adds randomness to the overlapped signal. Default is None.
 
         Returns
         -------
@@ -299,9 +307,13 @@ class Data:
         >>> data.overlap(kernel=[0, 10], total_time=50)  # 50 ms total
         >>> data.overlap(kernel=[0, 10], freq=20)  # 20 Hz = 50 ms total
         >>> data.overlap(kernel=[0, 5, 10, 10, 20], total_time=50)  # Wraparound
+        >>> # With second Poisson to randomize overlapping:
+        >>> data.overlap(kernel=[0, 25], poisson_seed=42)  # Adds randomness
         """
-        # Use convolved_data if available, otherwise use data
-        source_data = self.convolved_data if self.convolved_data is not None else self.data
+        # Use most recent stage: poissoned > convolved > data
+        source_data = (self.poissoned_data if self.poissoned_data is not None
+                      else self.convolved_data if self.convolved_data is not None
+                      else self.data)
 
         if source_data is None:
             raise ValueError("No data loaded. Call load_signal_data first.")
@@ -330,10 +342,27 @@ class Data:
         self.table = self.overlapped_data
 
         # Apply overlap to openbeam if available
-        op_source = self.op_convolved_data if self.op_convolved_data is not None else self.op_data
+        op_source = (self.op_poissoned_data if self.op_poissoned_data is not None
+                    else self.op_convolved_data if self.op_convolved_data is not None
+                    else self.op_data)
         if op_source is not None:
             self.op_overlapped_data = self._create_overlap(op_source, kernel, total_time, bin_width)
             self.openbeam_table = self.op_overlapped_data
+
+        # Apply optional second Poisson sampling to add randomness to overlapped signal
+        if poisson_seed is not None:
+            print(f"Applying second Poisson sampling with duty_cycle=1.0 and seed={poisson_seed}")
+            # Store current overlapped data temporarily
+            temp_overlapped = self.overlapped_data
+            temp_op_overlapped = self.op_overlapped_data
+
+            # Apply Poisson with duty_cycle=1.0
+            self.overlapped_data = self._apply_poisson(temp_overlapped, duty_cycle=1.0, seed=poisson_seed)
+            self.table = self.overlapped_data
+
+            if temp_op_overlapped is not None:
+                self.op_overlapped_data = self._apply_poisson(temp_op_overlapped, duty_cycle=1.0, seed=poisson_seed)
+                self.openbeam_table = self.op_overlapped_data
 
         return self
 
@@ -393,9 +422,13 @@ class Data:
         })
         return result
 
-    def poisson_sample(self, duty_cycle=None, flux=None, measurement_time=None, freq=None):
+    def poisson_sample(self, duty_cycle=None, flux=None, measurement_time=None, freq=None, seed=None):
         """
         Apply Poisson sampling to simulate realistic neutron counting statistics.
+
+        **NEW WORKFLOW**: Poisson sampling should typically be applied RIGHT AFTER loading data,
+        before convolution and overlap. This ensures proper statistics matching between
+        reference and reconstructed data.
 
         The duty cycle can be specified directly or calculated from instrument parameters.
         When flux, measurement_time, and freq are provided, duty cycle is calculated as:
@@ -418,6 +451,8 @@ class Data:
             New measurement time in hours. Requires flux and freq.
         freq : float, optional
             New measurement frequency in Hz. Requires flux and measurement_time.
+        seed : int, optional
+            Random seed for reproducible Poisson sampling. Default is None (random).
 
         Returns
         -------
@@ -426,15 +461,18 @@ class Data:
 
         Examples
         --------
-        >>> # Direct duty cycle
-        >>> data.poisson_sample(duty_cycle=0.8)
+        >>> # NEW RECOMMENDED ORDER: Poisson FIRST
+        >>> data = Data('signal.csv', 'openbeam.csv', flux=1e6, duration=1.0, freq=20)
+        >>> data.poisson_sample(duty_cycle=0.8)  # Apply Poisson FIRST
+        >>> data.convolute_response(200)
+        >>> data.overlap([0, 25])
 
         >>> # Calculate duty cycle from instrument parameters
         >>> # Original: flux=5e6 n/cm²/s, 0.5 hours, 20 Hz
         >>> # New: flux=1e4 n/cm²/s, 5 hours, 800 Hz
         >>> data.poisson_sample(flux=1e4, measurement_time=5, freq=800)
         """
-        # Use overlapped_data if available, otherwise convolved_data, otherwise data
+        # Use most recent stage of data
         source_data = (self.overlapped_data if self.overlapped_data is not None
                       else self.convolved_data if self.convolved_data is not None
                       else self.data)
@@ -469,7 +507,7 @@ class Data:
             raise ValueError("duty_cycle must be positive (typically between 0 and 1, but can exceed 1)")
 
         # Apply Poisson to signal
-        self.poissoned_data = self._apply_poisson(source_data, duty_cycle)
+        self.poissoned_data = self._apply_poisson(source_data, duty_cycle, seed)
         self.table = self.poissoned_data
 
         # Apply Poisson to openbeam if available
@@ -477,13 +515,17 @@ class Data:
                     else self.op_convolved_data if self.op_convolved_data is not None
                     else self.op_data)
         if op_source is not None:
-            self.op_poissoned_data = self._apply_poisson(op_source, duty_cycle)
+            self.op_poissoned_data = self._apply_poisson(op_source, duty_cycle, seed)
             self.openbeam_table = self.op_poissoned_data
 
         return self
 
-    def _apply_poisson(self, df, duty_cycle):
+    def _apply_poisson(self, df, duty_cycle, seed=None):
         """Helper to apply Poisson sampling to a dataframe."""
+        # Set random seed if provided
+        if seed is not None:
+            np.random.seed(seed)
+
         # Scale counts by duty cycle
         scaled_counts = df['counts'].values * duty_cycle
 
