@@ -169,12 +169,14 @@ class Reconstruct:
 
         # Pass both reconstructed signal and reconstructed openbeam to nbragg
         # nbragg will calculate transmission and uncertainties
-        return nbragg.Data.from_counts(
+        nbragg_data = nbragg.Data.from_counts(
             self.reconstructed_data.drop("time",axis=1).clip(lower=0).reset_index(),
             self.reconstructed_openbeam.drop("time",axis=1).clip(lower=0).reset_index(),
             L=L,
             tstep=tstep
         )
+        nbragg_data.table = nbragg_data.table.dropna()
+        return nbragg_data
 
     def optimize_noise(self, kind='wiener', noise_min=1e-4, noise_max=1.0, method='leastsq', **kwargs):
         """
