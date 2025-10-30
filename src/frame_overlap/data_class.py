@@ -84,23 +84,24 @@ class Data:
         """Initialize Data object and load data files if provided."""
         self.signal_file = signal_file
         self.openbeam_file = openbeam_file
-        self.flux = flux  # n/cm²/s
+        self.flux = flux  # n/cm²/s (for continuous source)
         self.duration = duration  # hours
         self.freq = freq  # Hz
         self.threshold = threshold
         self.max_stack = max_stack
+        self.pulse_duration = None  # µs - set by convolute_response()
 
         # Initialize data storage for signal at each stage
         self.data = None  # Original
         self.convolved_data = None  # After convolution
-        self.overlapped_data = None  # After frame overlap
         self.poissoned_data = None  # After Poisson sampling
+        self.overlapped_data = None  # After frame overlap
 
         # Initialize data storage for openbeam at each stage
         self.op_data = None
         self.op_convolved_data = None
-        self.op_overlapped_data = None
         self.op_poissoned_data = None
+        self.op_overlapped_data = None
 
         self.kernel = None
         self.n_overlapping_frames = None  # Number of overlapping frames
@@ -213,6 +214,10 @@ class Data:
         This mimics how the data would look when measured with an instrument
         having a longer pulse duration. Applies to both signal and openbeam.
 
+        **IMPORTANT**: The pulse_duration is stored and will be used automatically
+        by poisson_sample() to calculate the effective flux for a pulsed source:
+        effective_flux = flux × pulse_duration × freq
+
         Parameters
         ----------
         pulse_duration : float
@@ -230,6 +235,9 @@ class Data:
 
         if pulse_duration <= 0:
             raise ValueError("pulse_duration must be positive")
+
+        # Store pulse_duration for later use in poisson_sample()
+        self.pulse_duration = pulse_duration
 
         # Create square pulse kernel (normalized)
         pulse_length = int(pulse_duration / bin_width)
@@ -311,6 +319,7 @@ class Data:
         >>> data.overlap(kernel=[0, 25], poisson_seed=42)  # Adds randomness
         """
         # Use most recent stage: poissoned > convolved > data
+        # CORRECT WORKFLOW: overlap should come AFTER poisson
         source_data = (self.poissoned_data if self.poissoned_data is not None
                       else self.convolved_data if self.convolved_data is not None
                       else self.data)
@@ -426,16 +435,21 @@ class Data:
         """
         Apply Poisson sampling to simulate realistic neutron counting statistics.
 
-        **NEW WORKFLOW**: Poisson sampling should typically be applied RIGHT AFTER loading data,
-        before convolution and overlap. This ensures proper statistics matching between
-        reference and reconstructed data.
+        **CORRECT WORKFLOW**: Data → Convolute → **Poisson** → Overlap → Reconstruct
+
+        Poisson sampling should be applied AFTER convolution, which defines the pulse_duration.
+        The pulse_duration is used to calculate the effective flux for a pulsed source:
+
+        effective_flux = flux × (pulse_duration / 1e6) × freq
+
+        This accounts for the fact that the flux is measured for a continuous source,
+        but the actual measurement is pulsed.
 
         The duty cycle can be specified directly or calculated from instrument parameters.
         When flux, measurement_time, and freq are provided, duty cycle is calculated as:
-        duty_cycle = (flux_new / flux_orig) * (time_new / time_orig) * (freq_new / freq_orig)
+        duty_cycle = (flux_eff_new / flux_eff_orig) * (time_new / time_orig)
 
-        This simulates how the data would look with different instrument parameters
-        while accounting for the number of overlapping frames.
+        where flux_eff includes the pulse duration scaling.
 
         Applies to both signal and openbeam.
 
@@ -445,8 +459,9 @@ class Data:
             Duty cycle of the measurement (0 to 1). If provided, flux, measurement_time,
             and freq are ignored. Default is None.
         flux : float, optional
-            New neutron flux in n/cm²/s. Requires measurement_time and freq.
+            New neutron flux in n/cm²/s (continuous source). Requires measurement_time and freq.
             Units: neutrons per square centimeter per second.
+            NOTE: Automatically scaled by pulse_duration × freq for pulsed source.
         measurement_time : float, optional
             New measurement time in hours. Requires flux and freq.
         freq : float, optional
@@ -461,20 +476,18 @@ class Data:
 
         Examples
         --------
-        >>> # NEW RECOMMENDED ORDER: Poisson FIRST
+        >>> # CORRECT ORDER: Convolute THEN Poisson
         >>> data = Data('signal.csv', 'openbeam.csv', flux=1e6, duration=1.0, freq=20)
-        >>> data.poisson_sample(duty_cycle=0.8)  # Apply Poisson FIRST
-        >>> data.convolute_response(200)
+        >>> data.convolute_response(200)  # pulse_duration=200 µs
+        >>> data.poisson_sample(duty_cycle=0.8)  # Uses pulse_duration automatically
         >>> data.overlap([0, 25])
 
-        >>> # Calculate duty cycle from instrument parameters
-        >>> # Original: flux=5e6 n/cm²/s, 0.5 hours, 20 Hz
-        >>> # New: flux=1e4 n/cm²/s, 5 hours, 800 Hz
+        >>> # Or use instrument parameters (flux scaled automatically by pulse_duration × freq)
         >>> data.poisson_sample(flux=1e4, measurement_time=5, freq=800)
         """
-        # Use most recent stage of data
-        source_data = (self.overlapped_data if self.overlapped_data is not None
-                      else self.convolved_data if self.convolved_data is not None
+        # Use most recent stage of data: convolved > data
+        # Note: poissoned_data and overlapped_data should NOT be source for new Poisson
+        source_data = (self.convolved_data if self.convolved_data is not None
                       else self.data)
 
         if source_data is None:
@@ -495,13 +508,30 @@ class Data:
                     "to calculate duty cycle from instrument parameters"
                 )
 
-            # Calculate duty cycle: (flux_new/flux_orig) * (time_new/time_orig) * (freq_new/freq_orig)
-            duty_cycle = (flux / self.flux) * (measurement_time / self.duration) * (freq / self.freq)
+            # Calculate effective flux including pulse duration scaling
+            # For pulsed source: flux_eff = flux × (pulse_duration / 1e6) × freq
+            if self.pulse_duration is not None:
+                # Pulse duration scaling (convert µs to seconds)
+                flux_eff_new = flux * (self.pulse_duration / 1e6) * freq
+                flux_eff_orig = self.flux * (self.pulse_duration / 1e6) * self.freq
+                flux_ratio = flux_eff_new / flux_eff_orig
+
+                print(f"Pulse duration scaling applied: {self.pulse_duration} µs")
+                print(f"  Original effective flux: {flux_eff_orig:.2e} n/cm²/s")
+                print(f"  New effective flux: {flux_eff_new:.2e} n/cm²/s")
+            else:
+                # No pulse duration set - use raw flux
+                flux_ratio = flux / self.flux
+                print("Warning: No pulse_duration set. Using raw flux without pulsing correction.")
+                print("  Consider calling convolute_response() before poisson_sample()")
+
+            # Calculate duty cycle: (flux_eff_ratio) * (time_ratio)
+            time_ratio = measurement_time / self.duration
+            duty_cycle = flux_ratio * time_ratio
 
             print(f"Calculated duty cycle: {duty_cycle:.4f}")
-            print(f"  Flux ratio: {flux}/{self.flux} = {flux/self.flux:.4f}")
-            print(f"  Time ratio: {measurement_time}/{self.duration} = {measurement_time/self.duration:.4f}")
-            print(f"  Freq ratio: {freq}/{self.freq} = {freq/self.freq:.4f}")
+            print(f"  Flux ratio: {flux_ratio:.4f}")
+            print(f"  Time ratio: {time_ratio:.4f}")
 
         if not 0 < duty_cycle:  # Allow duty_cycle > 1 for higher flux scenarios
             raise ValueError("duty_cycle must be positive (typically between 0 and 1, but can exceed 1)")
@@ -510,9 +540,8 @@ class Data:
         self.poissoned_data = self._apply_poisson(source_data, duty_cycle, seed)
         self.table = self.poissoned_data
 
-        # Apply Poisson to openbeam if available
-        op_source = (self.op_overlapped_data if self.op_overlapped_data is not None
-                    else self.op_convolved_data if self.op_convolved_data is not None
+        # Apply Poisson to openbeam if available (use convolved if available, else original)
+        op_source = (self.op_convolved_data if self.op_convolved_data is not None
                     else self.op_data)
         if op_source is not None:
             self.op_poissoned_data = self._apply_poisson(op_source, duty_cycle, seed)
