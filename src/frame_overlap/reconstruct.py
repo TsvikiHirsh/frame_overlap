@@ -1081,5 +1081,6 @@ class Reconstruct:
         """String representation of the Reconstruct object."""
         has_recon = self.reconstructed_data is not None
         chi2_dof = self.statistics.get('chi2_per_dof', None)
+        chi2_str = f"{chi2_dof:.3f}" if chi2_dof is not None else 'N/A'
         return (f"Reconstruct(reconstructed={has_recon}, "
-                f"chi2_per_dof={chi2_dof:.3f if chi2_dof is not None else 'N/A'})")
+                f"chi2_per_dof={chi2_str})")

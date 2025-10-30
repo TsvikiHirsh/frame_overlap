@@ -667,13 +667,13 @@ class Data:
                                   yerr=trans_plot['err'], fmt='none', ecolor='0.5',
                                   capsize=2, alpha=0.5)
         else:
-            # Show current stage only
-            sig = (self.poissoned_data if self.poissoned_data is not None
-                  else self.overlapped_data if self.overlapped_data is not None
+            # Show current stage only (most processed stage available)
+            sig = (self.overlapped_data if self.overlapped_data is not None
+                  else self.poissoned_data if self.poissoned_data is not None
                   else self.convolved_data if self.convolved_data is not None
                   else self.data)
-            op = (self.op_poissoned_data if self.op_poissoned_data is not None
-                 else self.op_overlapped_data if self.op_overlapped_data is not None
+            op = (self.op_overlapped_data if self.op_overlapped_data is not None
+                 else self.op_poissoned_data if self.op_poissoned_data is not None
                  else self.op_convolved_data if self.op_convolved_data is not None
                  else self.op_data)
 
@@ -719,8 +719,8 @@ class Data:
                         ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                                   fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
         else:
-            df = (self.poissoned_data if self.poissoned_data is not None
-                 else self.overlapped_data if self.overlapped_data is not None
+            df = (self.overlapped_data if self.overlapped_data is not None
+                 else self.poissoned_data if self.poissoned_data is not None
                  else self.convolved_data if self.convolved_data is not None
                  else self.data)
             # Convert time to ms for plotting
@@ -762,8 +762,8 @@ class Data:
                         ax.errorbar(df_plot['time'].values, df_plot['counts'], yerr=df_plot['err'],
                                   fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
         else:
-            df = (self.op_poissoned_data if self.op_poissoned_data is not None
-                 else self.op_overlapped_data if self.op_overlapped_data is not None
+            df = (self.op_overlapped_data if self.op_overlapped_data is not None
+                 else self.op_poissoned_data if self.op_poissoned_data is not None
                  else self.op_convolved_data if self.op_convolved_data is not None
                  else self.op_data)
             # Convert time to ms for plotting

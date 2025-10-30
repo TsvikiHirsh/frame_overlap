@@ -10,6 +10,7 @@ Main Classes
 Data : Load and process neutron ToF data with convolution and frame overlap
 Reconstruct : Apply various deconvolution filters to reconstruct signals
 Analysis : Fit reconstructed data to extract material parameters
+Workflow : High-level interface for method chaining and parameter sweeps
 ParametricScan : Perform parametric scans over processing parameters
 
 Legacy Functions
@@ -25,6 +26,7 @@ The package also provides backward-compatible functional API:
 from .data_class import Data
 from .reconstruct import Reconstruct
 from .analysis_nbragg import Analysis
+from .workflow import Workflow
 from .analysis_class import Analysis as LegacyAnalysis, CrossSection
 from .groupby import ParametricScan, compare_configurations
 
@@ -39,6 +41,7 @@ __all__ = [
     'Data',
     'Reconstruct',
     'Analysis',
+    'Workflow',
     'LegacyAnalysis',
     'CrossSection',
     'ParametricScan',
