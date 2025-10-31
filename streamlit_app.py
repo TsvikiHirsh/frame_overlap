@@ -412,7 +412,7 @@ if st.session_state.workflow_data is not None:
     data = st.session_state.workflow_data
 
     # Create tabs for different views
-    tab1, tab2, tab3, tab4 = st.tabs(["📊 Signal", "📈 Transmission", "🔍 Reconstruction", "📉 Statistics"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Signal", "📈 Transmission", "🔍 Reconstruction", "📉 Statistics", "🔁 GroupBy"])
 
     with tab1:
         st.header("Signal Processing Stages")
@@ -452,8 +452,9 @@ if st.session_state.workflow_data is not None:
         st.header("Transmission")
 
         if data.op_data is not None:
-            # Use Data.plot() method for transmission
-            mpl_fig = data.plot(kind='transmission', show_errors=show_errors, figsize=(12, 6))
+            # Use Data.plot() method for transmission with ylim=(0, 1)
+            mpl_fig = data.plot(kind='transmission', show_errors=show_errors,
+                               figsize=(12, 6), ylim=(0, 1))
 
             # Convert to Plotly for interactivity
             plotly_fig = mpl_to_plotly(mpl_fig)
@@ -536,6 +537,237 @@ if st.session_state.workflow_data is not None:
             else:
                 st.info("No reconstruction statistics available yet.")
 
+    with tab5:
+        st.header("GroupBy - Parameter Sweep")
+
+        if st.session_state.recon is not None:
+            st.markdown("""
+            Run a parameter sweep to explore how different parameter values affect reconstruction quality.
+            This uses the Workflow's `groupby()` method to automatically sweep through parameter ranges.
+            """)
+
+            col1, col2 = st.columns([1, 2])
+
+            with col1:
+                st.subheader("Sweep Configuration")
+
+                # Parameter selection
+                sweep_params = {
+                    'pulse_duration': 'Pulse Duration (µs)',
+                    'noise_power': 'Noise Power',
+                    'iterations': 'Lucy-Richardson Iterations',
+                    'flux': 'Flux (n/cm²/s)',
+                }
+
+                param_to_sweep = st.selectbox(
+                    "Parameter to Sweep",
+                    options=list(sweep_params.keys()),
+                    format_func=lambda x: sweep_params[x],
+                    help="Select which parameter to vary"
+                )
+
+                # Parameter range inputs
+                st.markdown("**Range Settings**")
+
+                # Default ranges for different parameters
+                default_ranges = {
+                    'pulse_duration': (50, 500, 50),
+                    'noise_power': (0.001, 0.1, 0.01),
+                    'iterations': (5, 50, 5),
+                    'flux': (1e5, 5e6, 5e5),
+                }
+
+                low_default, high_default, step_default = default_ranges.get(
+                    param_to_sweep, (0.001, 0.1, 0.01)
+                )
+
+                use_num_points = st.checkbox("Use number of points instead of step", value=False)
+
+                if use_num_points:
+                    low_val = st.number_input(
+                        "Start Value",
+                        value=float(low_default),
+                        format="%.4f" if param_to_sweep == 'noise_power' else "%.2e" if param_to_sweep == 'flux' else "%.1f"
+                    )
+                    high_val = st.number_input(
+                        "End Value",
+                        value=float(high_default),
+                        format="%.4f" if param_to_sweep == 'noise_power' else "%.2e" if param_to_sweep == 'flux' else "%.1f"
+                    )
+                    num_points = st.slider("Number of Points", min_value=5, max_value=50, value=10)
+                    step_val = None
+                else:
+                    low_val = st.number_input(
+                        "Start Value",
+                        value=float(low_default),
+                        format="%.4f" if param_to_sweep == 'noise_power' else "%.2e" if param_to_sweep == 'flux' else "%.1f"
+                    )
+                    high_val = st.number_input(
+                        "End Value",
+                        value=float(high_default),
+                        format="%.4f" if param_to_sweep == 'noise_power' else "%.2e" if param_to_sweep == 'flux' else "%.1f"
+                    )
+                    step_val = st.number_input(
+                        "Step Size",
+                        value=float(step_default),
+                        format="%.4f" if param_to_sweep == 'noise_power' else "%.2e" if param_to_sweep == 'flux' else "%.1f"
+                    )
+                    num_points = None
+
+                # Y-axis selection for plot
+                st.markdown("**Plot Configuration**")
+                y_param_options = {
+                    'chi2': 'χ² (Chi-squared)',
+                    'redchi2': 'χ²/dof (Reduced Chi-squared)',
+                    'aic': 'AIC (Akaike Information Criterion)',
+                    'bic': 'BIC (Bayesian Information Criterion)',
+                    'param_thickness': 'Fitted Thickness',
+                    'param_N0': 'Fitted N0',
+                }
+
+                y_param = st.selectbox(
+                    "Y-axis Parameter",
+                    options=list(y_param_options.keys()),
+                    format_func=lambda x: y_param_options[x],
+                    help="Select which metric to plot"
+                )
+
+                # Run sweep button
+                run_sweep = st.button("🚀 Run Parameter Sweep", type="primary", use_container_width=True)
+
+            with col2:
+                st.subheader("Results")
+
+                if run_sweep:
+                    # Initialize session state for sweep results
+                    if 'sweep_results' not in st.session_state:
+                        st.session_state.sweep_results = None
+
+                    with st.spinner(f"Running parameter sweep for {sweep_params[param_to_sweep]}..."):
+                        try:
+                            # Create a fresh workflow from the current configuration
+                            wf = Workflow(signal_path, openbeam_path,
+                                        flux=flux_orig, duration=duration_orig, freq=freq_orig)
+
+                            # Apply all the stages as configured
+                            if apply_convolution:
+                                wf.convolute(pulse_duration if param_to_sweep != 'pulse_duration' else None,
+                                           bin_width=bin_width)
+
+                            if apply_poisson:
+                                wf.poisson(flux=flux_new if param_to_sweep != 'flux' else None,
+                                         freq=freq_new, measurement_time=measurement_time,
+                                         seed=seed_poisson)
+
+                            if apply_overlap:
+                                wf.overlap(kernel=kernel)
+
+                            # Set up groupby
+                            if use_num_points:
+                                wf.groupby(param_to_sweep, low=low_val, high=high_val, num=num_points)
+                            else:
+                                wf.groupby(param_to_sweep, low=low_val, high=high_val, step=step_val)
+
+                            # Reconstruct
+                            if param_to_sweep == 'noise_power':
+                                wf.reconstruct(kind='wiener', tmin=tmin, tmax=tmax)
+                            elif param_to_sweep == 'iterations':
+                                wf.reconstruct(kind='lucy', tmin=tmin, tmax=tmax)
+                            else:
+                                wf.reconstruct(kind=recon_method, tmin=tmin, tmax=tmax, **recon_params)
+
+                            # Analyze (requires xs parameter)
+                            wf.analyze(xs='iron')
+
+                            # Progress bar placeholder
+                            progress_placeholder = st.empty()
+                            progress_bar = progress_placeholder.progress(0.0)
+
+                            # Run the sweep
+                            results_df = wf.run(progress_bar=False)
+
+                            # Store results
+                            st.session_state.sweep_results = results_df
+
+                            progress_bar.progress(1.0)
+                            st.success(f"✅ Sweep completed! Processed {len(results_df)} configurations.")
+
+                        except Exception as e:
+                            st.error(f"Error during sweep: {e}")
+                            st.exception(e)
+
+                # Display results if available
+                if 'sweep_results' in st.session_state and st.session_state.sweep_results is not None:
+                    results_df = st.session_state.sweep_results
+
+                    # Show summary statistics
+                    st.markdown("**Summary Statistics**")
+                    summary_col1, summary_col2, summary_col3 = st.columns(3)
+
+                    with summary_col1:
+                        if param_to_sweep in results_df.columns:
+                            best_idx = results_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].idxmax()
+                            best_value = results_df.loc[best_idx, param_to_sweep]
+                            st.metric("Best Value", f"{best_value:.4g}")
+
+                    with summary_col2:
+                        if y_param in results_df.columns:
+                            best_metric = results_df[y_param].min() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].max()
+                            st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
+
+                    with summary_col3:
+                        st.metric("Total Runs", len(results_df))
+
+                    # Plot results
+                    if param_to_sweep in results_df.columns and y_param in results_df.columns:
+                        fig = go.Figure()
+
+                        fig.add_trace(go.Scatter(
+                            x=results_df[param_to_sweep],
+                            y=results_df[y_param],
+                            mode='lines+markers',
+                            name=y_param_options[y_param],
+                            line=dict(color='#1f77b4', width=2),
+                            marker=dict(size=8)
+                        ))
+
+                        # Highlight best point
+                        best_idx = results_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].idxmax()
+                        fig.add_trace(go.Scatter(
+                            x=[results_df.loc[best_idx, param_to_sweep]],
+                            y=[results_df.loc[best_idx, y_param]],
+                            mode='markers',
+                            name='Best',
+                            marker=dict(size=15, color='red', symbol='star')
+                        ))
+
+                        fig.update_layout(
+                            title=f"{y_param_options[y_param]} vs {sweep_params[param_to_sweep]}",
+                            xaxis_title=sweep_params[param_to_sweep],
+                            yaxis_title=y_param_options[y_param],
+                            hovermode='x unified',
+                            template='plotly_white',
+                            height=500
+                        )
+
+                        st.plotly_chart(fig, use_container_width=True)
+
+                    # Show data table
+                    with st.expander("📊 View Full Results Table"):
+                        st.dataframe(results_df, use_container_width=True)
+
+                        # Download button
+                        csv = results_df.to_csv(index=False)
+                        st.download_button(
+                            label="📥 Download Results as CSV",
+                            data=csv,
+                            file_name=f"sweep_{param_to_sweep}_{y_param}.csv",
+                            mime="text/csv"
+                        )
+
+        else:
+            st.info("⚠️ Please run a reconstruction first (see Reconstruction tab) before using GroupBy.")
+
 else:
     # Landing page
     st.info("👈 Configure the pipeline in the sidebar and click **Run Pipeline** to start!")
@@ -554,12 +786,20 @@ else:
     - 🎲 **Poisson Sampling**: Apply counting statistics with new flux conditions
     - 🔄 **Frame Overlap**: Create overlapping frames (2-4 frames supported)
     - 🔧 **Reconstruction**: Recover original signal using deconvolution
+    - 🔁 **GroupBy**: Parameter sweep for optimization and sensitivity analysis
 
     ## Available Methods
 
     - **Wiener Filter**: Fast, works well with known noise
     - **Lucy-Richardson**: Iterative, good for positive-valued data
     - **Tikhonov**: Regularization-based, smooth results
+
+    ## Features
+
+    - **Interactive Plots**: Zoom, pan, and hover to explore data
+    - **Parameter Sweeps**: Automatically explore parameter space with GroupBy
+    - **Real-time Processing**: See results instantly as you adjust parameters
+    - **Export Results**: Download sweep results as CSV
     """)
 
 # Footer
