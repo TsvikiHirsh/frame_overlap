@@ -262,6 +262,10 @@ class Analysis:
         )
 
         # Perform fit
+
+        # make sure nbragg_data has no NaNs
+        self.nbragg_data.table = self.nbragg_data.table.dropna()
+        
         self.result = self.model.fit(self.nbragg_data, **kwargs)
 
         return self.result
