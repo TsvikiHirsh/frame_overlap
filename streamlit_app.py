@@ -7,13 +7,106 @@ Explore neutron Time-of-Flight frame overlap analysis interactively!
 import streamlit as st
 import numpy as np
 import pandas as pd
-import matplotlib.pyplot as plt
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from pathlib import Path
+import io
 
 # Import frame_overlap
 import sys
 sys.path.insert(0, 'src')
 from frame_overlap import Data, Reconstruct, Workflow
+
+# Use Agg backend for matplotlib (non-interactive, for conversion to images)
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+def mpl_to_plotly(fig):
+    """
+    Convert matplotlib figure to plotly figure for interactivity.
+    Extracts data from matplotlib axes and recreates in plotly.
+    """
+    # Get the main axis (or first axis if multiple)
+    axes = fig.get_axes()
+
+    # Create plotly figure
+    if len(axes) == 1:
+        plotly_fig = go.Figure()
+        ax = axes[0]
+
+        # Extract lines from matplotlib
+        for line in ax.get_lines():
+            xdata = line.get_xdata()
+            ydata = line.get_ydata()
+            plotly_fig.add_trace(go.Scatter(
+                x=xdata, y=ydata,
+                mode='lines',
+                name=line.get_label(),
+                line=dict(color=matplotlib.colors.rgb2hex(line.get_color())),
+                showlegend=(line.get_label() and not line.get_label().startswith('_'))
+            ))
+
+        # Set layout
+        plotly_fig.update_layout(
+            xaxis_title=ax.get_xlabel(),
+            yaxis_title=ax.get_ylabel(),
+            title=ax.get_title(),
+            hovermode='x unified',
+            template='plotly_white'
+        )
+
+    elif len(axes) == 2:
+        # Two subplots (data + residuals)
+        plotly_fig = make_subplots(
+            rows=2, cols=1,
+            shared_xaxes=True,
+            vertical_spacing=0.05,
+            row_heights=[0.7, 0.3]
+        )
+
+        # Top plot (data)
+        ax_top = axes[0]
+        for line in ax_top.get_lines():
+            xdata = line.get_xdata()
+            ydata = line.get_ydata()
+            plotly_fig.add_trace(go.Scatter(
+                x=xdata, y=ydata,
+                mode='lines',
+                name=line.get_label(),
+                line=dict(color=matplotlib.colors.rgb2hex(line.get_color())),
+                showlegend=(line.get_label() and not line.get_label().startswith('_'))
+            ), row=1, col=1)
+
+        # Bottom plot (residuals)
+        ax_bottom = axes[1]
+        for line in ax_bottom.get_lines():
+            xdata = line.get_xdata()
+            ydata = line.get_ydata()
+            plotly_fig.add_trace(go.Scatter(
+                x=xdata, y=ydata,
+                mode='lines',
+                name=line.get_label(),
+                line=dict(color=matplotlib.colors.rgb2hex(line.get_color())),
+                showlegend=False
+            ), row=2, col=1)
+
+        # Set layout
+        plotly_fig.update_xaxes(title_text=ax_bottom.get_xlabel(), row=2, col=1)
+        plotly_fig.update_yaxes(title_text=ax_top.get_ylabel(), row=1, col=1)
+        plotly_fig.update_yaxes(title_text=ax_bottom.get_ylabel(), row=2, col=1)
+        plotly_fig.update_layout(
+            title=ax_top.get_title(),
+            hovermode='x unified',
+            template='plotly_white',
+            height=600
+        )
+
+    else:
+        # Fallback for other cases
+        plotly_fig = go.Figure()
+
+    return plotly_fig
 
 # Page config
 st.set_page_config(
@@ -330,58 +423,14 @@ if st.session_state.workflow_data is not None:
             show_stages = st.checkbox("Show All Stages", value=True)
             show_errors = st.checkbox("Show Error Bars", value=False)
 
-            fig, ax = plt.subplots(figsize=(12, 6))
+            # Use Data.plot() method
+            mpl_fig = data.plot(kind='signal', show_stages=show_stages,
+                               show_errors=show_errors, figsize=(12, 6))
 
-            if show_stages:
-                # Plot all stages
-                stages = [
-                    (data.data, 'Original', 'blue'),
-                ]
-                if data.convolved_data is not None:
-                    stages.append((data.convolved_data, 'Convolved', 'orange'))
-                if data.poissoned_data is not None:
-                    stages.append((data.poissoned_data, 'Poissoned', 'green'))
-                if data.overlapped_data is not None:
-                    stages.append((data.overlapped_data, 'Overlapped', 'red'))
-
-                for df, label, color in stages:
-                    time_ms = df['time'].values / 1000
-                    counts = df['counts'].values
-                    ax.plot(time_ms, counts, label=label, alpha=0.7, color=color, drawstyle='steps-mid')
-
-                    if show_errors:
-                        err = df['err'].values
-                        ax.fill_between(time_ms, counts - err, counts + err, alpha=0.2, color=color)
-            else:
-                # Plot current stage
-                if data.overlapped_data is not None:
-                    df = data.overlapped_data
-                    label = 'Overlapped'
-                elif data.poissoned_data is not None:
-                    df = data.poissoned_data
-                    label = 'Poissoned'
-                elif data.convolved_data is not None:
-                    df = data.convolved_data
-                    label = 'Convolved'
-                else:
-                    df = data.data
-                    label = 'Original'
-
-                time_ms = df['time'].values / 1000
-                counts = df['counts'].values
-                ax.plot(time_ms, counts, label=label, color='blue', drawstyle='steps-mid')
-
-                if show_errors:
-                    err = df['err'].values
-                    ax.fill_between(time_ms, counts - err, counts + err, alpha=0.3)
-
-            ax.set_xlabel('Time (ms)', fontsize=12)
-            ax.set_ylabel('Counts', fontsize=12)
-            ax.set_title('Signal Processing', fontsize=14, fontweight='bold')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
-            st.pyplot(fig)
-            plt.close()
+            # Convert to Plotly for interactivity
+            plotly_fig = mpl_to_plotly(mpl_fig)
+            st.plotly_chart(plotly_fig, use_container_width=True)
+            plt.close(mpl_fig)
 
         with col2:
             st.markdown("**Current Stage Info**")
@@ -403,39 +452,13 @@ if st.session_state.workflow_data is not None:
         st.header("Transmission")
 
         if data.op_data is not None:
-            fig, ax = plt.subplots(figsize=(12, 6))
+            # Use Data.plot() method for transmission
+            mpl_fig = data.plot(kind='transmission', show_errors=show_errors, figsize=(12, 6))
 
-            # Calculate transmission
-            if data.overlapped_data is not None and data.op_overlapped_data is not None:
-                sig = data.overlapped_data
-                op = data.op_overlapped_data
-                stage_name = "Overlapped"
-            elif data.poissoned_data is not None and data.op_poissoned_data is not None:
-                sig = data.poissoned_data
-                op = data.op_poissoned_data
-                stage_name = "Poissoned"
-            elif data.convolved_data is not None and data.op_convolved_data is not None:
-                sig = data.convolved_data
-                op = data.op_convolved_data
-                stage_name = "Convolved"
-            else:
-                sig = data.data
-                op = data.op_data
-                stage_name = "Original"
-
-            # Calculate transmission
-            min_len = min(len(sig), len(op))
-            time_ms = sig['time'].values[:min_len] / 1000
-            transmission = sig['counts'].values[:min_len] / np.maximum(op['counts'].values[:min_len], 1)
-
-            ax.plot(time_ms, transmission, drawstyle='steps-mid', color='purple', linewidth=1.5)
-            ax.set_xlabel('Time (ms)', fontsize=12)
-            ax.set_ylabel('Transmission', fontsize=12)
-            ax.set_title(f'Transmission ({stage_name})', fontsize=14, fontweight='bold')
-            ax.set_ylim(0, 1)
-            ax.grid(True, alpha=0.3)
-            st.pyplot(fig)
-            plt.close()
+            # Convert to Plotly for interactivity
+            plotly_fig = mpl_to_plotly(mpl_fig)
+            st.plotly_chart(plotly_fig, use_container_width=True)
+            plt.close(mpl_fig)
         else:
             st.warning("No openbeam data available for transmission calculation.")
 
@@ -445,50 +468,21 @@ if st.session_state.workflow_data is not None:
         if st.session_state.recon is not None:
             recon = st.session_state.recon
 
-            # Plot reconstruction
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), height_ratios=[2, 1])
+            # Choose plot type
+            plot_type = st.radio(
+                "Plot Type",
+                ["transmission", "signal"],
+                format_func=lambda x: "Transmission" if x == "transmission" else "Signal",
+                horizontal=True
+            )
 
-            time_ms = recon.reference_data['time'].values / 1000
-            reference = recon.reference_data['counts'].values
-            reconstructed = recon.reconstructed_data['counts'].values
-            errors = recon.reference_data['err'].values
+            # Use Reconstruct.plot() method
+            mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors, figsize=(12, 8))
 
-            # Top plot: Data comparison
-            ax1.plot(time_ms, reference, 'k-', label='Target (Poissoned+Convolved)', linewidth=2, alpha=0.7)
-            ax1.plot(time_ms, reconstructed, 'r--', label='Reconstructed', linewidth=1.5)
-            ax1.fill_between(time_ms, reference - errors, reference + errors, alpha=0.2, color='gray')
-
-            # Add tmin/tmax indicators
-            if tmin is not None:
-                ax1.axvline(tmin, color='green', linestyle=':', alpha=0.6, linewidth=2, label=f'tmin={tmin}')
-            if tmax is not None:
-                ax1.axvline(tmax, color='orange', linestyle=':', alpha=0.6, linewidth=2, label=f'tmax={tmax}')
-
-            ax1.set_ylabel('Counts', fontsize=12)
-            ax1.set_title(f'Reconstruction: {recon_method.title()} Filter', fontsize=14, fontweight='bold')
-            ax1.legend()
-            ax1.grid(True, alpha=0.3)
-
-            # Bottom plot: Residuals
-            residuals = (reference - reconstructed) / np.maximum(errors, 1e-10)
-            ax2.plot(time_ms, residuals, 'b-', alpha=0.7)
-            ax2.axhline(0, color='black', linestyle='-', linewidth=0.8)
-            ax2.axhline(2, color='gray', linestyle='--', alpha=0.5)
-            ax2.axhline(-2, color='gray', linestyle='--', alpha=0.5)
-            ax2.fill_between(time_ms, -2, 2, alpha=0.1, color='green')
-
-            if tmin is not None:
-                ax2.axvline(tmin, color='green', linestyle=':', alpha=0.6, linewidth=2)
-            if tmax is not None:
-                ax2.axvline(tmax, color='orange', linestyle=':', alpha=0.6, linewidth=2)
-
-            ax2.set_xlabel('Time (ms)', fontsize=12)
-            ax2.set_ylabel('Residuals (σ)', fontsize=12)
-            ax2.grid(True, alpha=0.3)
-
-            plt.tight_layout()
-            st.pyplot(fig)
-            plt.close()
+            # Convert to Plotly for interactivity
+            plotly_fig = mpl_to_plotly(mpl_fig)
+            st.plotly_chart(plotly_fig, use_container_width=True)
+            plt.close(mpl_fig)
         else:
             st.info("Run reconstruction to see results here.")
 

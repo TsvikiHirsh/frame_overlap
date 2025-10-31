@@ -3,10 +3,11 @@
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org)
 [![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 [![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://tsvikihirsh.github.io/frame_overlap/)
+[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://frame-overlap.streamlit.app)
 
 A Python package for analyzing neutron Time-of-Flight (ToF) frame overlap data using deconvolution techniques.
 
-**📚 [Full Documentation](https://tsvikihirsh.github.io/frame_overlap/)** | **📓 [Examples](notebooks/)** | **🚀 [Quick Start](#quick-start)**
+**📚 [Full Documentation](https://tsvikihirsh.github.io/frame_overlap/)** | **📓 [Examples](notebooks/)** | **🚀 [Quick Start](#quick-start)** | **🎮 [Try the Interactive App](https://frame-overlap.streamlit.app)**
 
 ## Features
 
