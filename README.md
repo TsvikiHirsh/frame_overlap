@@ -1,59 +1,130 @@
-# Frame Overlap
+# frame_overlap
 
-A Python package for analyzing frame overlap in neutron Time-of-Flight (ToF) data using deconvolution techniques, parameter optimization, and visualization.
+[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://tsvikihirsh.github.io/frame_overlap/)
+
+A Python package for analyzing neutron Time-of-Flight (ToF) frame overlap data using deconvolution techniques.
+
+**📚 [Full Documentation](https://tsvikihirsh.github.io/frame_overlap/)** | **📓 [Examples](notebooks/)** | **🚀 [Quick Start](#quick-start)**
 
 ## Features
-- **Data Utilities**: Read and prepare ToF data from CSV files.
-- **Analysis**: Wiener deconvolution with non-overlapping rectangular pulse kernels and Poisson sampling.
-- **Optimization**: Chi-squared comparison and parameter optimization using `lmfit`.
-- **Visualization**: Comprehensive plotting of signals, kernels, and residuals.
+
+✨ **Fluent API** - Chain complete pipeline in one expression
+📊 **Parameter Sweeps** - Automatic optimization with progress tracking
+🔧 **Multi-Frame** - Support 2+ overlapping frames
+📈 **Material Analysis** - Integrated nbragg fitting
+🎯 **Smart Scaling** - Automatic flux scaling by pulse duration
 
 ## Installation
-Install via pip:
+
 ```bash
 pip install git+https://github.com/TsvikiHirsh/frame_overlap.git
 ```
 
-Or clone and install locally:
-```bash
-git clone https://github.com/TsvikiHirsh/frame_overlap.git
-cd frame_overlap
-pip install .
+## Quick Start
+
+### TL;DR - Complete Pipeline
+
+```python
+from frame_overlap import Workflow
+
+# One chain from data to analysis
+wf = Workflow('signal.csv', 'openbeam.csv', flux=5e6, duration=0.5, freq=20)
+
+result = (wf
+    .convolute(pulse_duration=200)
+    .poisson(flux=1e6, freq=60, measurement_time=30)
+    .overlap(kernel=[0, 25])
+    .reconstruct(kind='wiener', noise_power=0.01)
+    .analyze(xs='iron'))
+
+wf.plot()  # Visualize results
 ```
 
-## Requirements
-- Python >= 3.7
-- NumPy >= 1.21
-- Pandas >= 1.3
-- SciPy >= 1.7
-- Matplotlib >= 3.4
-- lmfit >= 1.0
+### Parameter Optimization
 
-## Usage
 ```python
-from frame_overlap import read_tof_data, generate_kernel, wiener_deconvolution, plot_analysis, optimize_parameters
+# Find optimal noise_power
+results = (Workflow('signal.csv', 'openbeam.csv', flux=5e6, duration=0.5, freq=20)
+    .convolute(pulse_duration=200)
+    .poisson(flux=1e6, freq=60, measurement_time=30)
+    .overlap(kernel=[0, 25])
+    .groupby('noise_power', low=0.01, high=0.1, num=20)  # Sweep parameter
+    .reconstruct(kind='wiener')
+    .analyze(xs='iron')
+    .run())  # Shows progress bar!
 
-# Read data
-t_signal, signal, errors, stacks = read_tof_data('tof_data.csv', threshold=30)
+# Find best
+best = results.loc[results['redchi2'].idxmin()]
+print(f"Optimal noise_power: {best['noise_power']:.4f}")
+```
 
-# Generate kernel
-t_kernel, kernel = generate_kernel(n_pulses=5, pulse_duration=200)
+## Processing Pipeline
 
-# Apply Wiener deconvolution
-observed_poisson, reconstructed = apply_filter(signal, kernel, stats_fraction=0.2, noise_power=0.05)
+```
+Data → Convolute → Poisson → Overlap → Reconstruct → Analysis
+        ↓           ↓          ↓          ↓           ↓
+    Instrument  Add noise  Frame ops  Recover     Material
+     response   (+flux              signal      fitting
+                scaling)
+```
 
-# Plot results
-scaled_original = signal * 0.2
-chi2, chi2_per_dof = chi2_analysis(scaled_original, reconstructed, np.sqrt(observed_poisson))
-plot_analysis(t_signal, signal, scaled_original, t_kernel, kernel, observed_poisson, reconstructed, scaled_original - reconstructed, chi2_per_dof)
+**Key**: Convolute **before** Poisson! The `pulse_duration` defines flux scaling.
 
-# Optimize parameters
-result = optimize_parameters(t_signal, signal)
-print(result.fit_report())
+## Documentation
+
+📚 **[Full Documentation](https://tsvikihirsh.github.io/frame_overlap/)**
+
+- [Installation Guide](https://tsvikihirsh.github.io/frame_overlap/installation.html)
+- [Quick Start](https://tsvikihirsh.github.io/frame_overlap/quickstart.html)
+- [Workflow Guide](https://tsvikihirsh.github.io/frame_overlap/workflow_guide.html)
+- [API Reference](https://tsvikihirsh.github.io/frame_overlap/api/workflow.html)
+
+## Examples
+
+📓 **[Example Notebooks](notebooks/)**
+
+- [Basic Workflow](notebooks/example_1_basic_workflow.ipynb) - Complete pipeline
+- [Parameter Optimization](notebooks/example_2_parameter_optimization.ipynb) - Find optimal parameters
+- [Multi-Frame Overlap](notebooks/example_3_multi_frame_overlap.ipynb) - 3-4 frame setups
+- [Reconstruction Methods](notebooks/example_4_reconstruction_methods.ipynb) - Compare algorithms
+
+## Main Classes
+
+**`Workflow`** - Complete pipeline with method chaining and parameter sweeps
+**`Data`** - Load and process ToF data
+**`Reconstruct`** - Deconvolution (Wiener, Lucy-Richardson, Tikhonov)
+**`Analysis`** - Material fitting with nbragg
+
+See [API Reference](https://tsvikihirsh.github.io/frame_overlap/api/workflow.html) for details.
+
+## Requirements
+
+- Python 3.9+
+- numpy, pandas, matplotlib, scipy, scikit-image, tqdm
+
+Optional: nbragg (for analysis), lmfit (for optimization), jupyter (for notebooks)
+
+## Citation
+
+If you use this package, please cite:
+
+```bibtex
+@software{frame_overlap,
+  title = {frame_overlap: Neutron ToF Frame Overlap Analysis},
+  author = {Hirsh, Tsviki and contributors},
+  year = {2025},
+  url = {https://github.com/TsvikiHirsh/frame_overlap}
+}
 ```
 
 ## License
-MIT License
 
-## Contributing
-Pull requests are welcome! Please open an issue first to discuss changes.
+MIT License - see [LICENSE](LICENSE) file
+
+## Links
+
+- **Documentation**: https://tsvikihirsh.github.io/frame_overlap/
+- **Repository**: https://github.com/TsvikiHirsh/frame_overlap
+- **Issues**: https://github.com/TsvikiHirsh/frame_overlap/issues

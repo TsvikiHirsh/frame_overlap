@@ -4,26 +4,36 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frame_overlap"
-version = "0.1.0"
-description = "A package for analyzing frame overlap in neutron ToF data with deconvolution and optimization."
+version = "0.2.0"
+description = "Neutron Time-of-Flight frame overlap analysis with deconvolution and material fitting."
 authors = [
     { name = "Tsviki Y. Hirsh", email = "tsviki@soreq.gov.il" }
 ]
 readme = "README.md"
-requires-python = ">=3.7"
+requires-python = ">=3.9"
 dependencies = [
     "numpy>=1.21",
     "pandas>=1.5",
     "scipy>=1.7",
     "matplotlib>=3.5",
     "lmfit>=1.0"
+    "scikit-image>=0.19",
+    "tqdm>=4.60"
 ]
 license = { text = "MIT" }
-keywords = ["neutron", "tof", "deconvolution", "wiener", "optimization"]
+keywords = ["neutron", "tof", "deconvolution", "wiener", "optimization", "frame-overlap", "nbragg"]
+
+[project.optional-dependencies]
+nbragg = ["nbragg"]
+lmfit = ["lmfit>=1.0"]
+dev = ["pytest>=7.0", "black", "isort", "sphinx", "sphinx_rtd_theme"]
+all = ["nbragg", "lmfit>=1.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [project.urls]
 "Homepage" = "https://github.com/TsvikiHirsh/frame_overlap"
+"Documentation" = "https://tsvikihirsh.github.io/frame_overlap/"
 "Repository" = "https://github.com/TsvikiHirsh/frame_overlap.git"
+"Issues" = "https://github.com/TsvikiHirsh/frame_overlap/issues"

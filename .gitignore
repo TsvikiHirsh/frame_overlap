@@ -2,3 +2,15 @@ build/*
 src/frame_overlap.egg-info
 notebooks/.ipynb_checkpoints
 tests/__pycache__
+src/frame_overlap/__pycache__
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+.venv
+dist/
+docs/_build/
