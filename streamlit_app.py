@@ -514,13 +514,13 @@ if st.session_state.workflow_data is not None:
                 stats = recon.get_statistics()
 
                 metrics_df = pd.DataFrame({
-                    'Metric': ['χ²/dof', 'RMSE', 'MAE', 'Max Error', 'R²'],
+                    'Metric': ['χ²/dof'],
                     'Value': [
                         f"{stats['chi2_per_dof']:.2f}",
-                        f"{stats['rmse']:.2e}",
-                        f"{stats['mae']:.2e}",
-                        f"{stats['max_abs_error']:.2e}",
-                        f"{stats['r_squared']:.4f}"
+                        # f"{stats['rmse']:.2e}",
+                        # f"{stats['mae']:.2e}",
+                        # f"{stats['max_abs_error']:.2e}",
+                        # f"{stats['r_squared']:.4f}"
                     ]
                 })
                 st.dataframe(metrics_df, hide_index=True, use_container_width=True)
