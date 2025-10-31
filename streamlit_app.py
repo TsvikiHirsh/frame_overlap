@@ -650,13 +650,14 @@ if st.session_state.workflow_data is not None:
                                         flux=flux_orig, duration=duration_orig, freq=freq_orig)
 
                             # Apply all the stages as configured
-                            if apply_convolution:
-                                wf.convolute(pulse_duration if param_to_sweep != 'pulse_duration' else None,
-                                           bin_width=bin_width)
+                            # Skip convolution if we're sweeping pulse_duration (it will be applied in the sweep)
+                            if apply_convolution and param_to_sweep != 'pulse_duration':
+                                wf.convolute(pulse_duration, bin_width=bin_width)
 
-                            if apply_poisson:
-                                wf.poisson(flux=flux_new if param_to_sweep != 'flux' else None,
-                                         freq=freq_new, measurement_time=measurement_time,
+                            # Skip poisson if we're sweeping flux (it will be applied in the sweep)
+                            if apply_poisson and param_to_sweep != 'flux':
+                                wf.poisson(flux=flux_new, freq=freq_new,
+                                         measurement_time=measurement_time,
                                          seed=seed_poisson)
 
                             if apply_overlap:
@@ -668,12 +669,15 @@ if st.session_state.workflow_data is not None:
                             else:
                                 wf.groupby(param_to_sweep, low=low_val, high=high_val, step=step_val)
 
-                            # Reconstruct
+                            # Reconstruct - don't pass the swept parameter here, it will be applied in the sweep
                             if param_to_sweep == 'noise_power':
+                                # Sweeping noise_power, so use wiener but don't pass noise_power
                                 wf.reconstruct(kind='wiener', tmin=tmin, tmax=tmax)
                             elif param_to_sweep == 'iterations':
+                                # Sweeping iterations, so use lucy but don't pass iterations
                                 wf.reconstruct(kind='lucy', tmin=tmin, tmax=tmax)
                             else:
+                                # Not sweeping a reconstruction parameter, so pass them normally
                                 wf.reconstruct(kind=recon_method, tmin=tmin, tmax=tmax, **recon_params)
 
                             # Analyze (requires xs parameter)
