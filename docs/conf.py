@@ -80,3 +80,7 @@ myst_enable_extensions = [
 # nbsphinx settings
 nbsphinx_execute = 'never'  # Don't execute notebooks during build
 nbsphinx_allow_errors = True
+nbsphinx_timeout = 60
+
+# Suppress duplicate object warnings
+suppress_warnings = ['ref.duplicate', 'app.add_node']

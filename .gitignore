@@ -13,3 +13,4 @@ venv/
 ENV/
 .venv
 dist/
+docs/_build/
