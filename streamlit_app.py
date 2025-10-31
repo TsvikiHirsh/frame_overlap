@@ -178,7 +178,7 @@ if 'recon' not in st.session_state:
     st.session_state.recon = None
 
 # Stage 1: Data Loading
-with st.sidebar.expander("📁 1. Data Loading", expanded=True):
+with st.sidebar.expander("📁 1. Data Loading", expanded=False):
     st.markdown("**Original Measurement Parameters**")
     flux_orig = st.number_input(
         "Original Flux (n/cm²/s)",
@@ -209,7 +209,7 @@ with st.sidebar.expander("📁 1. Data Loading", expanded=True):
     )
 
 # Stage 2: Convolution
-with st.sidebar.expander("🔊 2. Instrument Response", expanded=True):
+with st.sidebar.expander("🔊 2. Instrument Response", expanded=False):
     apply_convolution = st.checkbox("Apply Convolution", value=True)
 
     if apply_convolution:
@@ -235,7 +235,7 @@ with st.sidebar.expander("🔊 2. Instrument Response", expanded=True):
         bin_width = 10
 
 # Stage 3: Poisson Sampling
-with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=True):
+with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
     apply_poisson = st.checkbox("Apply Poisson", value=True)
 
     if apply_poisson:
@@ -282,7 +282,7 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=True):
         seed_poisson = None
 
 # Stage 4: Frame Overlap
-with st.sidebar.expander("🔄 4. Frame Overlap", expanded=True):
+with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
     apply_overlap = st.checkbox("Apply Overlap", value=True)
 
     if apply_overlap:
@@ -477,8 +477,12 @@ if st.session_state.workflow_data is not None:
                 horizontal=True
             )
 
-            # Use Reconstruct.plot() method
-            mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors, figsize=(12, 8))
+            # Use Reconstruct.plot() method with ylim for transmission
+            if plot_type == 'transmission':
+                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors,
+                                    figsize=(12, 8), ylim=(0, 1))
+            else:
+                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors, figsize=(12, 8))
 
             # Convert to Plotly for interactivity
             plotly_fig = mpl_to_plotly(mpl_fig)
@@ -709,15 +713,24 @@ if st.session_state.workflow_data is not None:
                     summary_col1, summary_col2, summary_col3 = st.columns(3)
 
                     with summary_col1:
-                        if param_to_sweep in results_df.columns:
-                            best_idx = results_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].idxmax()
-                            best_value = results_df.loc[best_idx, param_to_sweep]
-                            st.metric("Best Value", f"{best_value:.4g}")
+                        if param_to_sweep in results_df.columns and y_param in results_df.columns:
+                            # Drop NaN values before finding best
+                            valid_df = results_df.dropna(subset=[y_param])
+                            if len(valid_df) > 0:
+                                best_idx = valid_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else valid_df[y_param].idxmax()
+                                best_value = results_df.loc[best_idx, param_to_sweep]
+                                st.metric("Best Value", f"{best_value:.4g}")
+                            else:
+                                st.metric("Best Value", "N/A")
 
                     with summary_col2:
                         if y_param in results_df.columns:
-                            best_metric = results_df[y_param].min() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].max()
-                            st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
+                            valid_df = results_df.dropna(subset=[y_param])
+                            if len(valid_df) > 0:
+                                best_metric = valid_df[y_param].min() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else valid_df[y_param].max()
+                                st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
+                            else:
+                                st.metric(f"Best {y_param_options[y_param]}", "N/A")
 
                     with summary_col3:
                         st.metric("Total Runs", len(results_df))
@@ -726,6 +739,7 @@ if st.session_state.workflow_data is not None:
                     if param_to_sweep in results_df.columns and y_param in results_df.columns:
                         fig = go.Figure()
 
+                        # Plot all points (including NaN which will be skipped by plotly)
                         fig.add_trace(go.Scatter(
                             x=results_df[param_to_sweep],
                             y=results_df[y_param],
@@ -735,15 +749,17 @@ if st.session_state.workflow_data is not None:
                             marker=dict(size=8)
                         ))
 
-                        # Highlight best point
-                        best_idx = results_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].idxmax()
-                        fig.add_trace(go.Scatter(
-                            x=[results_df.loc[best_idx, param_to_sweep]],
-                            y=[results_df.loc[best_idx, y_param]],
-                            mode='markers',
-                            name='Best',
-                            marker=dict(size=15, color='red', symbol='star')
-                        ))
+                        # Highlight best point (if valid data exists)
+                        valid_df = results_df.dropna(subset=[y_param])
+                        if len(valid_df) > 0:
+                            best_idx = valid_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else valid_df[y_param].idxmax()
+                            fig.add_trace(go.Scatter(
+                                x=[results_df.loc[best_idx, param_to_sweep]],
+                                y=[results_df.loc[best_idx, y_param]],
+                                mode='markers',
+                                name='Best',
+                                marker=dict(size=15, color='red', symbol='star')
+                            ))
 
                         fig.update_layout(
                             title=f"{y_param_options[y_param]} vs {sweep_params[param_to_sweep]}",
