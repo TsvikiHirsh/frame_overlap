@@ -659,7 +659,7 @@ if st.session_state.workflow_data is not None:
                     'chi2': 'χ² (Chi-squared)',
                     'chi2_per_dof': 'χ²/dof (Reduced Chi-squared)',
                     'rmse': 'RMSE (Root Mean Square Error)',
-                    'mae': 'MAE (Mean Absolute Error)',
+                    'nrmse': 'NRMSE (Normalized RMSE)',
                     'r_squared': 'R² (Coefficient of Determination)',
                 }
 
@@ -776,12 +776,12 @@ if st.session_state.workflow_data is not None:
 
                                     results.append({
                                         param_to_sweep: value,
-                                        'chi2': stats['chi2'],
-                                        'chi2_per_dof': stats['chi2_per_dof'],
-                                        'rmse': stats['rmse'],
-                                        'mae': stats['mae'],
-                                        'max_abs_error': stats['max_abs_error'],
-                                        'r_squared': stats['r_squared']
+                                        'chi2': stats.get('chi2', np.nan),
+                                        'chi2_per_dof': stats.get('chi2_per_dof', np.nan),
+                                        'rmse': stats.get('rmse', np.nan),
+                                        'nrmse': stats.get('nrmse', np.nan),
+                                        'r_squared': stats.get('r_squared', np.nan),
+                                        'n_points': stats.get('n_points', 0)
                                     })
 
                                 except Exception as e:
@@ -818,8 +818,8 @@ if st.session_state.workflow_data is not None:
                             # Drop NaN values before finding best
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                # Minimize chi2, rmse, mae; Maximize r_squared
-                                best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'mae'] else valid_df[y_param].idxmax()
+                                # Minimize chi2, rmse, nrmse; Maximize r_squared
+                                best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].idxmax()
                                 best_value = results_df.loc[best_idx, param_to_sweep]
                                 st.metric("Best Value", f"{best_value:.4g}")
                             else:
@@ -829,8 +829,8 @@ if st.session_state.workflow_data is not None:
                         if y_param in results_df.columns:
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                # Minimize chi2, rmse, mae; Maximize r_squared
-                                best_metric = valid_df[y_param].min() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'mae'] else valid_df[y_param].max()
+                                # Minimize chi2, rmse, nrmse; Maximize r_squared
+                                best_metric = valid_df[y_param].min() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].max()
                                 st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
                             else:
                                 st.metric(f"Best {y_param_options[y_param]}", "N/A")
@@ -855,8 +855,8 @@ if st.session_state.workflow_data is not None:
                         # Highlight best point (if valid data exists)
                         valid_df = results_df.dropna(subset=[y_param])
                         if len(valid_df) > 0:
-                            # Minimize chi2, rmse, mae; Maximize r_squared
-                            best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'mae'] else valid_df[y_param].idxmax()
+                            # Minimize chi2, rmse, nrmse; Maximize r_squared
+                            best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].idxmax()
                             fig.add_trace(go.Scatter(
                                 x=[results_df.loc[best_idx, param_to_sweep]],
                                 y=[results_df.loc[best_idx, y_param]],
