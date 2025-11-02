@@ -364,6 +364,22 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
             value=42,
             help="For reproducibility"
         )
+
+        # Calculate and display duty cycle
+        if apply_convolution and pulse_duration is not None:
+            # Pulsed source duty cycle
+            flux_ratio = flux_new / flux_orig
+            time_ratio = (measurement_time_hours) / duration_orig
+            duty_cycle_pulsed = flux_ratio * time_ratio * freq_new * (pulse_duration / 1e6)
+            duty_cycle_percent = duty_cycle_pulsed * 100
+            st.info(f"💡 Duty Cycle: {duty_cycle_percent:.4f}%")
+        else:
+            # Continuous source duty cycle
+            flux_ratio = flux_new / flux_orig
+            time_ratio = measurement_time_hours / duration_orig
+            duty_cycle_continuous = flux_ratio * time_ratio
+            duty_cycle_percent = duty_cycle_continuous * 100
+            st.info(f"💡 Duty Cycle: {duty_cycle_percent:.4f}% (continuous source)")
     else:
         flux_new = None
         freq_new = None
