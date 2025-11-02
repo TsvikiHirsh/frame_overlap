@@ -657,11 +657,10 @@ if st.session_state.workflow_data is not None:
                 st.markdown("**Plot Configuration**")
                 y_param_options = {
                     'chi2': 'χ² (Chi-squared)',
-                    'redchi2': 'χ²/dof (Reduced Chi-squared)',
-                    'aic': 'AIC (Akaike Information Criterion)',
-                    'bic': 'BIC (Bayesian Information Criterion)',
-                    'param_thickness': 'Fitted Thickness',
-                    'param_N0': 'Fitted N0',
+                    'chi2_per_dof': 'χ²/dof (Reduced Chi-squared)',
+                    'rmse': 'RMSE (Root Mean Square Error)',
+                    'mae': 'MAE (Mean Absolute Error)',
+                    'r_squared': 'R² (Coefficient of Determination)',
                 }
 
                 y_param = st.selectbox(
@@ -725,20 +724,81 @@ if st.session_state.workflow_data is not None:
                                 # Not sweeping a reconstruction parameter, so pass them normally
                                 wf.reconstruct(kind=recon_method, tmin=tmin, tmax=tmax, **recon_params)
 
-                            # Analyze (requires xs parameter)
-                            wf.analyze(xs='iron')
+                            # Manual sweep without Analysis (simpler and doesn't fail)
+                            # Get sweep parameter values
+                            if use_num_points:
+                                param_values = np.linspace(low_val, high_val, num_points)
+                            else:
+                                param_values = np.arange(low_val, high_val + step_val/2, step_val)
 
-                            # Progress bar placeholder
+                            # Progress bar
                             progress_placeholder = st.empty()
                             progress_bar = progress_placeholder.progress(0.0)
 
-                            # Run the sweep
-                            results_df = wf.run(progress_bar=False)
+                            results = []
+                            for i, value in enumerate(param_values):
+                                try:
+                                    # Reload data
+                                    data_sweep = Data(signal_path, openbeam_path,
+                                                     flux=flux_orig, duration=duration_orig, freq=freq_orig)
+
+                                    # Apply stages
+                                    if apply_convolution:
+                                        if param_to_sweep == 'pulse_duration':
+                                            data_sweep.convolute_response(value, bin_width=bin_width)
+                                        else:
+                                            data_sweep.convolute_response(pulse_duration, bin_width=bin_width)
+
+                                    if apply_poisson:
+                                        if param_to_sweep == 'flux':
+                                            data_sweep.poisson_sample(flux=value, freq=freq_new,
+                                                                     measurement_time=measurement_time, seed=seed_poisson)
+                                        else:
+                                            data_sweep.poisson_sample(flux=flux_new, freq=freq_new,
+                                                                     measurement_time=measurement_time, seed=seed_poisson)
+
+                                    if apply_overlap:
+                                        data_sweep.overlap(kernel=kernel)
+
+                                    # Reconstruct
+                                    if param_to_sweep == 'noise_power':
+                                        recon_sweep = Reconstruct(data_sweep, tmin=tmin, tmax=tmax)
+                                        recon_sweep.filter(kind='wiener', noise_power=value)
+                                    elif param_to_sweep == 'iterations':
+                                        recon_sweep = Reconstruct(data_sweep, tmin=tmin, tmax=tmax)
+                                        recon_sweep.filter(kind='lucy', iterations=int(value))
+                                    else:
+                                        recon_sweep = Reconstruct(data_sweep, tmin=tmin, tmax=tmax)
+                                        recon_sweep.filter(kind=recon_method, **recon_params)
+
+                                    # Get reconstruction statistics
+                                    stats = recon_sweep.get_statistics()
+
+                                    results.append({
+                                        param_to_sweep: value,
+                                        'chi2': stats['chi2'],
+                                        'chi2_per_dof': stats['chi2_per_dof'],
+                                        'rmse': stats['rmse'],
+                                        'mae': stats['mae'],
+                                        'max_abs_error': stats['max_abs_error'],
+                                        'r_squared': stats['r_squared']
+                                    })
+
+                                except Exception as e:
+                                    st.warning(f"Error at {param_to_sweep}={value:.4g}: {e}")
+                                    results.append({
+                                        param_to_sweep: value,
+                                        'chi2': np.nan,
+                                        'error': str(e)
+                                    })
+
+                                # Update progress
+                                progress_bar.progress((i + 1) / len(param_values))
 
                             # Store results
+                            results_df = pd.DataFrame(results)
                             st.session_state.sweep_results = results_df
 
-                            progress_bar.progress(1.0)
                             st.success(f"✅ Sweep completed! Processed {len(results_df)} configurations.")
 
                         except Exception as e:
@@ -758,7 +818,8 @@ if st.session_state.workflow_data is not None:
                             # Drop NaN values before finding best
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                best_idx = valid_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else valid_df[y_param].idxmax()
+                                # Minimize chi2, rmse, mae; Maximize r_squared
+                                best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'mae'] else valid_df[y_param].idxmax()
                                 best_value = results_df.loc[best_idx, param_to_sweep]
                                 st.metric("Best Value", f"{best_value:.4g}")
                             else:
@@ -768,7 +829,8 @@ if st.session_state.workflow_data is not None:
                         if y_param in results_df.columns:
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                best_metric = valid_df[y_param].min() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else valid_df[y_param].max()
+                                # Minimize chi2, rmse, mae; Maximize r_squared
+                                best_metric = valid_df[y_param].min() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'mae'] else valid_df[y_param].max()
                                 st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
                             else:
                                 st.metric(f"Best {y_param_options[y_param]}", "N/A")
@@ -793,7 +855,8 @@ if st.session_state.workflow_data is not None:
                         # Highlight best point (if valid data exists)
                         valid_df = results_df.dropna(subset=[y_param])
                         if len(valid_df) > 0:
-                            best_idx = valid_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else valid_df[y_param].idxmax()
+                            # Minimize chi2, rmse, mae; Maximize r_squared
+                            best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'mae'] else valid_df[y_param].idxmax()
                             fig.add_trace(go.Scatter(
                                 x=[results_df.loc[best_idx, param_to_sweep]],
                                 y=[results_df.loc[best_idx, y_param]],
