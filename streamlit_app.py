@@ -22,10 +22,17 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-def mpl_to_plotly(fig):
+def mpl_to_plotly(fig, show_errors=True):
     """
     Convert matplotlib figure to plotly figure for interactivity.
     Extracts data from matplotlib axes and recreates in plotly.
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+        The matplotlib figure to convert
+    show_errors : bool
+        Whether to show error bars (default: True)
     """
     # Get the main axis (or first axis if multiple)
     axes = fig.get_axes()
@@ -35,7 +42,29 @@ def mpl_to_plotly(fig):
         plotly_fig = go.Figure()
         ax = axes[0]
 
-        # Extract lines from matplotlib
+        # Extract lines and error bars from matplotlib
+        # Process error bars first (lower zorder)
+        if show_errors:
+            for collection in ax.collections:
+                # Error bars are typically PolyCollection objects
+                if hasattr(collection, 'get_paths') and len(collection.get_paths()) > 0:
+                    # This is likely an error bar fill
+                    for path in collection.get_paths():
+                        vertices = path.vertices
+                        if len(vertices) > 0:
+                            plotly_fig.add_trace(go.Scatter(
+                                x=vertices[:, 0],
+                                y=vertices[:, 1],
+                                mode='lines',
+                                fill='toself',
+                                fillcolor=matplotlib.colors.to_hex(collection.get_facecolor()[0], keep_alpha=True),
+                                line=dict(width=0),
+                                opacity=0.2,
+                                showlegend=False,
+                                hoverinfo='skip'
+                            ))
+
+        # Extract lines from matplotlib (higher zorder)
         for line in ax.get_lines():
             xdata = line.get_xdata()
             ydata = line.get_ydata()
@@ -71,6 +100,26 @@ def mpl_to_plotly(fig):
 
         # Top plot (data)
         ax_top = axes[0]
+
+        # Process error bars first (lower zorder) for top plot
+        if show_errors:
+            for collection in ax_top.collections:
+                if hasattr(collection, 'get_paths') and len(collection.get_paths()) > 0:
+                    for path in collection.get_paths():
+                        vertices = path.vertices
+                        if len(vertices) > 0:
+                            plotly_fig.add_trace(go.Scatter(
+                                x=vertices[:, 0],
+                                y=vertices[:, 1],
+                                mode='lines',
+                                fill='toself',
+                                fillcolor=matplotlib.colors.to_hex(collection.get_facecolor()[0], keep_alpha=True),
+                                line=dict(width=0),
+                                opacity=0.2,
+                                showlegend=False,
+                                hoverinfo='skip'
+                            ), row=1, col=1)
+
         for line in ax_top.get_lines():
             xdata = line.get_xdata()
             ydata = line.get_ydata()
@@ -178,6 +227,11 @@ signal_path, openbeam_path = data_paths
 
 # Sidebar
 st.sidebar.header("⚙️ Processing Pipeline")
+
+# Process button at the top
+process_button = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True)
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("Configure each stage of the analysis pipeline:")
 
 # Initialize session state for workflow
@@ -222,23 +276,17 @@ with st.sidebar.expander("🔊 2. Instrument Response", expanded=False):
     apply_convolution = st.checkbox("Apply Convolution", value=True)
 
     if apply_convolution:
-        pulse_duration = st.slider(
+        pulse_duration = st.number_input(
             "Pulse Duration (µs)",
-            min_value=50,
-            max_value=500,
-            value=200,
-            step=10,
-            help="Instrument pulse duration in microseconds"
+            min_value=0.0,
+            max_value=5000.0,
+            value=200.0,
+            step=10.0,
+            format="%.1f",
+            help="Instrument pulse duration in microseconds (0-5000 µs)"
         )
-
-        bin_width = st.slider(
-            "Bin Width (µs)",
-            min_value=5,
-            max_value=20,
-            value=10,
-            step=1,
-            help="Time bin width"
-        )
+        bin_width = 10  # Fixed at 10 µs
+        st.caption("Bin Width: 10 µs (fixed)")
     else:
         pulse_duration = None
         bin_width = 10
@@ -264,18 +312,21 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
             min_value=10,
             max_value=100,
             value=60,
-            step=5,
-            help="New pulse frequency"
+            step=1,
+            help="New pulse frequency (10-100 Hz)"
         )
 
-        measurement_time = st.slider(
-            "Measurement Time (min)",
-            min_value=1,
-            max_value=60,
-            value=30,
-            step=1,
-            help="New measurement duration"
+        measurement_time_hours = st.number_input(
+            "Measurement Time (hours)",
+            min_value=0.5,
+            max_value=240.0,
+            value=0.5,
+            step=0.5,
+            format="%.1f",
+            help="New measurement duration in hours (0.5-240 hours)"
         )
+        # Convert hours to minutes for internal use
+        measurement_time = measurement_time_hours * 60
 
         seed_poisson = st.number_input(
             "Random Seed",
@@ -288,6 +339,7 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
         flux_new = None
         freq_new = None
         measurement_time = None
+        measurement_time_hours = None
         seed_poisson = None
 
 # Stage 4: Frame Overlap
@@ -295,39 +347,96 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
     apply_overlap = st.checkbox("Apply Overlap", value=True)
 
     if apply_overlap:
-        n_frames = st.slider(
-            "Number of Frames",
-            min_value=2,
-            max_value=4,
-            value=2,
-            help="Number of overlapping frames"
+        # Kernel input mode
+        kernel_mode = st.radio(
+            "Kernel Input Mode",
+            ["Auto-generate", "Manual"],
+            help="Choose whether to auto-generate kernel or input manually"
         )
 
-        if n_frames == 2:
-            frame_spacing = st.slider(
-                "Frame Spacing (ms)",
-                min_value=10,
-                max_value=40,
-                value=25,
-                step=1,
-                help="Time between frame starts"
+        if kernel_mode == "Manual":
+            # Manual kernel input
+            kernel_str = st.text_input(
+                "Kernel (comma-separated, ms)",
+                value="0,25",
+                help="Enter frame times in ms, e.g., '0,10,25,35'"
             )
-            kernel = [0, frame_spacing]
-            total_time = frame_spacing * 2
-        elif n_frames == 3:
-            spacing_1 = st.slider("Frame 1→2 (ms)", 10, 30, 15, 1)
-            spacing_2 = st.slider("Frame 2→3 (ms)", 10, 30, 15, 1)
-            kernel = [0, spacing_1, spacing_1 + spacing_2]
-            total_time = spacing_1 + spacing_2 + 20
-        else:  # 4 frames
-            spacing = st.slider("Frame Spacing (ms)", 8, 20, 12, 1)
-            kernel = [0, spacing, spacing*2, spacing*3]
-            total_time = spacing * 4
+            try:
+                kernel = [float(x.strip()) for x in kernel_str.split(',')]
+                n_frames = len(kernel)
+                total_time = max(kernel) + 20 if kernel else 50
+                st.success(f"✓ {n_frames} frames: {kernel} ms")
+            except ValueError:
+                st.error("Invalid kernel format. Use comma-separated numbers.")
+                kernel = [0, 25]
+                n_frames = 2
+                total_time = 50
 
-        st.info(f"Kernel: {kernel} ms")
+        else:  # Auto-generate mode
+            # Spacing type
+            spacing_type = st.radio(
+                "Spacing Type",
+                ["Equal", "Random"],
+                help="Equal spacing or random spacing between frames"
+            )
+
+            # Number of frames
+            n_frames = st.slider(
+                "Number of Frames",
+                min_value=2,
+                max_value=10,
+                value=2,
+                help="Number of overlapping frames"
+            )
+
+            # Max time for kernel
+            max_kernel_time = st.number_input(
+                "Max Time (ms)",
+                min_value=10.0,
+                max_value=200.0,
+                value=50.0,
+                step=10.0,
+                help="Maximum time span for the kernel"
+            )
+
+            # Generate kernel based on spacing type
+            if spacing_type == "Equal":
+                # Equally spaced frames
+                spacing = max_kernel_time / (n_frames - 1) if n_frames > 1 else max_kernel_time
+                kernel = [round(i * spacing, 2) for i in range(n_frames)]
+            else:  # Random
+                # Randomly spaced frames with seed for reproducibility
+                seed_kernel = seed_poisson if seed_poisson is not None else 42
+                np.random.seed(seed_kernel)
+                if n_frames > 1:
+                    # Generate random positions and sort them
+                    random_positions = np.random.uniform(0, max_kernel_time, n_frames - 1)
+                    kernel = [0.0] + sorted([round(pos, 1) for pos in random_positions])
+                else:
+                    kernel = [0.0]
+
+            # Display generated kernel in editable field
+            kernel_str_generated = ','.join([str(k) for k in kernel])
+            kernel_str_edited = st.text_input(
+                "Generated Kernel (editable, ms)",
+                value=kernel_str_generated,
+                help="Auto-generated kernel - you can edit if needed"
+            )
+
+            # Parse edited kernel
+            try:
+                kernel = [float(x.strip()) for x in kernel_str_edited.split(',')]
+                n_frames = len(kernel)
+            except ValueError:
+                st.error("Invalid kernel format. Using auto-generated values.")
+
+            total_time = max(kernel) + 20 if kernel else 50
+
+            st.info(f"📊 Kernel: {kernel} ms ({n_frames} frames)")
     else:
         kernel = None
         total_time = None
+        n_frames = 1
 
 # Stage 5: Reconstruction
 with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
@@ -373,9 +482,6 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
         recon_method = None
         recon_params = {}
         tmin, tmax = None, None
-
-# Process button
-process_button = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True)
 
 # Main content area
 if process_button:
@@ -462,7 +568,7 @@ if st.session_state.workflow_data is not None:
                                        show_errors=show_errors, figsize=(12, 6))
 
                 # Convert to Plotly for interactivity
-                plotly_fig = mpl_to_plotly(mpl_fig)
+                plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors)
 
                 # Apply log scale if requested
                 if log_scale:
@@ -494,7 +600,7 @@ if st.session_state.workflow_data is not None:
             recon = st.session_state.recon
 
             # Controls
-            ctrl_col1, ctrl_col2 = st.columns(2)
+            ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
 
             with ctrl_col1:
                 plot_type = st.radio(
@@ -505,17 +611,20 @@ if st.session_state.workflow_data is not None:
                 )
 
             with ctrl_col2:
+                show_errors_recon = st.checkbox("Show Error Bars", value=True, key="recon_errors")
+
+            with ctrl_col3:
                 recon_log_scale = st.checkbox("Log Scale (Y)", value=False, key="recon_log")
 
             # Use Reconstruct.plot() method with ylim for transmission
             if plot_type == 'transmission':
-                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors,
+                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors_recon,
                                     figsize=(12, 8), ylim=(0, 1))
             else:
-                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors, figsize=(12, 8))
+                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors_recon, figsize=(12, 8))
 
             # Convert to Plotly for interactivity
-            plotly_fig = mpl_to_plotly(mpl_fig)
+            plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_recon)
 
             # Apply log scale if requested (only to top plot)
             if recon_log_scale:
@@ -582,8 +691,12 @@ if st.session_state.workflow_data is not None:
         if st.session_state.recon is not None:
             st.markdown("""
             Run a parameter sweep to explore how different parameter values affect reconstruction quality.
-            This uses the Workflow's `groupby()` method to automatically sweep through parameter ranges.
             """)
+
+            # Run sweep button at the top
+            run_sweep = st.button("🚀 Run Parameter Sweep", type="primary", use_container_width=True, key="run_sweep_top")
+
+            st.markdown("---")
 
             col1, col2 = st.columns([1, 2])
 
@@ -675,9 +788,6 @@ if st.session_state.workflow_data is not None:
                     format_func=lambda x: y_param_options[x],
                     help="Select which metric to plot"
                 )
-
-                # Run sweep button
-                run_sweep = st.button("🚀 Run Parameter Sweep", type="primary", use_container_width=True)
 
             with col2:
                 st.subheader("Results")
@@ -893,23 +1003,30 @@ if st.session_state.workflow_data is not None:
                         recon_objs = st.session_state.sweep_recon_objects
                         param_name = st.session_state.sweep_param_name
 
-                        # Slider to select which reconstruction to view
-                        idx = st.slider(
-                            f"Select {sweep_params.get(param_name, param_name)}",
-                            min_value=0,
-                            max_value=len(recon_objs) - 1,
-                            value=0,
-                            format=f"{sweep_params.get(param_name, param_name)} = %.4g"
-                        )
+                        # Controls for individual viewer
+                        viewer_col1, viewer_col2 = st.columns([3, 1])
+
+                        with viewer_col2:
+                            show_errors_individual = st.checkbox("Show Error Bars", value=True, key="individual_errors")
+
+                        with viewer_col1:
+                            # Slider to select which reconstruction to view
+                            idx = st.slider(
+                                f"Select {sweep_params.get(param_name, param_name)}",
+                                min_value=0,
+                                max_value=len(recon_objs) - 1,
+                                value=0,
+                                format=f"{sweep_params.get(param_name, param_name)} = %.4g"
+                            )
 
                         selected = recon_objs[idx]
                         st.markdown(f"**{sweep_params.get(param_name, param_name)}: {selected['value']:.4g}**")
 
                         # Plot reconstruction
                         try:
-                            mpl_fig = selected['recon'].plot(kind='transmission', show_errors=True,
+                            mpl_fig = selected['recon'].plot(kind='transmission', show_errors=show_errors_individual,
                                                             figsize=(12, 8), ylim=(0, 1))
-                            plotly_fig = mpl_to_plotly(mpl_fig)
+                            plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_individual)
                             st.plotly_chart(plotly_fig, use_container_width=True)
                             plt.close(mpl_fig)
                         except Exception as e:
