@@ -16,7 +16,7 @@ dependencies = [
     "pandas>=1.5",
     "scipy>=1.7",
     "matplotlib>=3.5",
-    "lmfit>=1.0"
+    "lmfit>=1.0",
     "scikit-image>=0.19",
     "tqdm>=4.60"
 ]

@@ -47,13 +47,17 @@ def mpl_to_plotly(fig):
                 showlegend=(line.get_label() and not line.get_label().startswith('_'))
             ))
 
-        # Set layout
+        # Set layout and preserve axis limits
+        ylim = ax.get_ylim()
+        xlim = ax.get_xlim()
         plotly_fig.update_layout(
             xaxis_title=ax.get_xlabel(),
             yaxis_title=ax.get_ylabel(),
             title=ax.get_title(),
             hovermode='x unified',
-            template='plotly_white'
+            template='plotly_white',
+            xaxis=dict(range=xlim),
+            yaxis=dict(range=ylim)
         )
 
     elif len(axes) == 2:
@@ -91,10 +95,15 @@ def mpl_to_plotly(fig):
                 showlegend=False
             ), row=2, col=1)
 
-        # Set layout
-        plotly_fig.update_xaxes(title_text=ax_bottom.get_xlabel(), row=2, col=1)
-        plotly_fig.update_yaxes(title_text=ax_top.get_ylabel(), row=1, col=1)
-        plotly_fig.update_yaxes(title_text=ax_bottom.get_ylabel(), row=2, col=1)
+        # Set layout and preserve axis limits
+        top_ylim = ax_top.get_ylim()
+        bottom_ylim = ax_bottom.get_ylim()
+        xlim = ax_top.get_xlim()
+
+        plotly_fig.update_xaxes(title_text=ax_bottom.get_xlabel(), range=xlim, row=2, col=1)
+        plotly_fig.update_xaxes(range=xlim, row=1, col=1)
+        plotly_fig.update_yaxes(title_text=ax_top.get_ylabel(), range=top_ylim, row=1, col=1)
+        plotly_fig.update_yaxes(title_text=ax_bottom.get_ylabel(), range=bottom_ylim, row=2, col=1)
         plotly_fig.update_layout(
             title=ax_top.get_title(),
             hovermode='x unified',
@@ -412,25 +421,55 @@ if st.session_state.workflow_data is not None:
     data = st.session_state.workflow_data
 
     # Create tabs for different views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Signal", "📈 Transmission", "🔍 Reconstruction", "📉 Statistics", "🔁 GroupBy"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Signal / Transmission", "🔍 Reconstruction", "📉 Statistics", "🔁 GroupBy"])
 
     with tab1:
-        st.header("Signal Processing Stages")
+        st.header("Signal / Transmission")
 
         col1, col2 = st.columns([3, 1])
 
         with col1:
-            show_stages = st.checkbox("Show All Stages", value=True)
-            show_errors = st.checkbox("Show Error Bars", value=False)
+            # Controls row 1: Plot type and stages
+            ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
 
-            # Use Data.plot() method
-            mpl_fig = data.plot(kind='signal', show_stages=show_stages,
-                               show_errors=show_errors, figsize=(12, 6))
+            with ctrl_col1:
+                plot_kind = st.radio(
+                    "View",
+                    ["signal", "transmission"],
+                    format_func=lambda x: "Signal" if x == "signal" else "Transmission",
+                    horizontal=True
+                )
 
-            # Convert to Plotly for interactivity
-            plotly_fig = mpl_to_plotly(mpl_fig)
-            st.plotly_chart(plotly_fig, use_container_width=True)
-            plt.close(mpl_fig)
+            with ctrl_col2:
+                show_stages = st.checkbox("Show All Stages", value=True)
+
+            with ctrl_col3:
+                show_errors = st.checkbox("Show Error Bars", value=False)
+
+            with ctrl_col4:
+                log_scale = st.checkbox("Log Scale (Y)", value=False)
+
+            # Generate plot
+            if plot_kind == "transmission" and data.op_data is None:
+                st.warning("No openbeam data available for transmission calculation.")
+            else:
+                # Use Data.plot() method
+                if plot_kind == 'transmission':
+                    mpl_fig = data.plot(kind='transmission', show_stages=show_stages,
+                                       show_errors=show_errors, figsize=(12, 6), ylim=(0, 1))
+                else:
+                    mpl_fig = data.plot(kind='signal', show_stages=show_stages,
+                                       show_errors=show_errors, figsize=(12, 6))
+
+                # Convert to Plotly for interactivity
+                plotly_fig = mpl_to_plotly(mpl_fig)
+
+                # Apply log scale if requested
+                if log_scale:
+                    plotly_fig.update_yaxes(type="log")
+
+                st.plotly_chart(plotly_fig, use_container_width=True)
+                plt.close(mpl_fig)
 
         with col2:
             st.markdown("**Current Stage Info**")
@@ -449,33 +488,24 @@ if st.session_state.workflow_data is not None:
                 st.metric("Data Points", len(data.data))
 
     with tab2:
-        st.header("Transmission")
-
-        if data.op_data is not None:
-            # Use Data.plot() method for transmission with ylim=(0, 1)
-            mpl_fig = data.plot(kind='transmission', show_errors=show_errors,
-                               figsize=(12, 6), ylim=(0, 1))
-
-            # Convert to Plotly for interactivity
-            plotly_fig = mpl_to_plotly(mpl_fig)
-            st.plotly_chart(plotly_fig, use_container_width=True)
-            plt.close(mpl_fig)
-        else:
-            st.warning("No openbeam data available for transmission calculation.")
-
-    with tab3:
         st.header("Reconstruction Results")
 
         if st.session_state.recon is not None:
             recon = st.session_state.recon
 
-            # Choose plot type
-            plot_type = st.radio(
-                "Plot Type",
-                ["transmission", "signal"],
-                format_func=lambda x: "Transmission" if x == "transmission" else "Signal",
-                horizontal=True
-            )
+            # Controls
+            ctrl_col1, ctrl_col2 = st.columns(2)
+
+            with ctrl_col1:
+                plot_type = st.radio(
+                    "Plot Type",
+                    ["transmission", "signal"],
+                    format_func=lambda x: "Transmission" if x == "transmission" else "Signal",
+                    horizontal=True
+                )
+
+            with ctrl_col2:
+                recon_log_scale = st.checkbox("Log Scale (Y)", value=False, key="recon_log")
 
             # Use Reconstruct.plot() method with ylim for transmission
             if plot_type == 'transmission':
@@ -486,12 +516,17 @@ if st.session_state.workflow_data is not None:
 
             # Convert to Plotly for interactivity
             plotly_fig = mpl_to_plotly(mpl_fig)
+
+            # Apply log scale if requested (only to top plot)
+            if recon_log_scale:
+                plotly_fig.update_yaxes(type="log", row=1, col=1)
+
             st.plotly_chart(plotly_fig, use_container_width=True)
             plt.close(mpl_fig)
         else:
             st.info("Run reconstruction to see results here.")
 
-    with tab4:
+    with tab3:
         st.header("Statistics & Metrics")
 
         col1, col2 = st.columns(2)
@@ -541,7 +576,7 @@ if st.session_state.workflow_data is not None:
             else:
                 st.info("No reconstruction statistics available yet.")
 
-    with tab5:
+    with tab4:
         st.header("GroupBy - Parameter Sweep")
 
         if st.session_state.recon is not None:
@@ -654,15 +689,21 @@ if st.session_state.workflow_data is not None:
                                         flux=flux_orig, duration=duration_orig, freq=freq_orig)
 
                             # Apply all the stages as configured
-                            # Skip convolution if we're sweeping pulse_duration (it will be applied in the sweep)
-                            if apply_convolution and param_to_sweep != 'pulse_duration':
-                                wf.convolute(pulse_duration, bin_width=bin_width)
+                            # When sweeping a parameter, call the method but don't pass that parameter
+                            if apply_convolution:
+                                if param_to_sweep == 'pulse_duration':
+                                    wf.convolute(bin_width=bin_width)  # pulse_duration from sweep
+                                else:
+                                    wf.convolute(pulse_duration, bin_width=bin_width)
 
-                            # Skip poisson if we're sweeping flux (it will be applied in the sweep)
-                            if apply_poisson and param_to_sweep != 'flux':
-                                wf.poisson(flux=flux_new, freq=freq_new,
-                                         measurement_time=measurement_time,
-                                         seed=seed_poisson)
+                            if apply_poisson:
+                                if param_to_sweep == 'flux':
+                                    wf.poisson(freq=freq_new, measurement_time=measurement_time,
+                                             seed=seed_poisson)  # flux from sweep
+                                else:
+                                    wf.poisson(flux=flux_new, freq=freq_new,
+                                             measurement_time=measurement_time,
+                                             seed=seed_poisson)
 
                             if apply_overlap:
                                 wf.overlap(kernel=kernel)
