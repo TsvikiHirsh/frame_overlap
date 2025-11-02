@@ -22,10 +22,17 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
-def mpl_to_plotly(fig):
+def mpl_to_plotly(fig, show_errors=True):
     """
     Convert matplotlib figure to plotly figure for interactivity.
     Extracts data from matplotlib axes and recreates in plotly.
+
+    Parameters
+    ----------
+    fig : matplotlib.figure.Figure
+        The matplotlib figure to convert
+    show_errors : bool
+        Whether to show error bars (default: True)
     """
     # Get the main axis (or first axis if multiple)
     axes = fig.get_axes()
@@ -35,7 +42,31 @@ def mpl_to_plotly(fig):
         plotly_fig = go.Figure()
         ax = axes[0]
 
-        # Extract lines from matplotlib
+        # Extract lines and error bars from matplotlib
+        # Process error bars first (lower zorder)
+        if show_errors:
+            for collection in ax.collections:
+                # Error bars are typically PolyCollection objects
+                if hasattr(collection, 'get_paths') and len(collection.get_paths()) > 0:
+                    # This is likely an error bar fill
+                    facecolors = collection.get_facecolor()
+                    if len(facecolors) > 0:
+                        for path in collection.get_paths():
+                            vertices = path.vertices
+                            if len(vertices) > 0:
+                                plotly_fig.add_trace(go.Scatter(
+                                    x=vertices[:, 0],
+                                    y=vertices[:, 1],
+                                    mode='lines',
+                                    fill='toself',
+                                    fillcolor=matplotlib.colors.to_hex(facecolors[0], keep_alpha=True),
+                                    line=dict(width=0),
+                                    opacity=0.2,
+                                    showlegend=False,
+                                    hoverinfo='skip'
+                                ))
+
+        # Extract lines from matplotlib (higher zorder)
         for line in ax.get_lines():
             xdata = line.get_xdata()
             ydata = line.get_ydata()
@@ -47,13 +78,17 @@ def mpl_to_plotly(fig):
                 showlegend=(line.get_label() and not line.get_label().startswith('_'))
             ))
 
-        # Set layout
+        # Set layout and preserve axis limits
+        ylim = ax.get_ylim()
+        xlim = ax.get_xlim()
         plotly_fig.update_layout(
             xaxis_title=ax.get_xlabel(),
             yaxis_title=ax.get_ylabel(),
             title=ax.get_title(),
             hovermode='x unified',
-            template='plotly_white'
+            template='plotly_white',
+            xaxis=dict(range=xlim),
+            yaxis=dict(range=ylim)
         )
 
     elif len(axes) == 2:
@@ -67,6 +102,28 @@ def mpl_to_plotly(fig):
 
         # Top plot (data)
         ax_top = axes[0]
+
+        # Process error bars first (lower zorder) for top plot
+        if show_errors:
+            for collection in ax_top.collections:
+                if hasattr(collection, 'get_paths') and len(collection.get_paths()) > 0:
+                    facecolors = collection.get_facecolor()
+                    if len(facecolors) > 0:
+                        for path in collection.get_paths():
+                            vertices = path.vertices
+                            if len(vertices) > 0:
+                                plotly_fig.add_trace(go.Scatter(
+                                    x=vertices[:, 0],
+                                    y=vertices[:, 1],
+                                    mode='lines',
+                                    fill='toself',
+                                    fillcolor=matplotlib.colors.to_hex(facecolors[0], keep_alpha=True),
+                                    line=dict(width=0),
+                                    opacity=0.2,
+                                    showlegend=False,
+                                    hoverinfo='skip'
+                                ), row=1, col=1)
+
         for line in ax_top.get_lines():
             xdata = line.get_xdata()
             ydata = line.get_ydata()
@@ -91,10 +148,15 @@ def mpl_to_plotly(fig):
                 showlegend=False
             ), row=2, col=1)
 
-        # Set layout
-        plotly_fig.update_xaxes(title_text=ax_bottom.get_xlabel(), row=2, col=1)
-        plotly_fig.update_yaxes(title_text=ax_top.get_ylabel(), row=1, col=1)
-        plotly_fig.update_yaxes(title_text=ax_bottom.get_ylabel(), row=2, col=1)
+        # Set layout and preserve axis limits
+        top_ylim = ax_top.get_ylim()
+        bottom_ylim = ax_bottom.get_ylim()
+        xlim = ax_top.get_xlim()
+
+        plotly_fig.update_xaxes(title_text=ax_bottom.get_xlabel(), range=xlim, row=2, col=1)
+        plotly_fig.update_xaxes(range=xlim, row=1, col=1)
+        plotly_fig.update_yaxes(title_text=ax_top.get_ylabel(), range=top_ylim, row=1, col=1)
+        plotly_fig.update_yaxes(title_text=ax_bottom.get_ylabel(), range=bottom_ylim, row=2, col=1)
         plotly_fig.update_layout(
             title=ax_top.get_title(),
             hovermode='x unified',
@@ -169,6 +231,11 @@ signal_path, openbeam_path = data_paths
 
 # Sidebar
 st.sidebar.header("⚙️ Processing Pipeline")
+
+# Process button at the top
+process_button = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True)
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("Configure each stage of the analysis pipeline:")
 
 # Initialize session state for workflow
@@ -178,7 +245,7 @@ if 'recon' not in st.session_state:
     st.session_state.recon = None
 
 # Stage 1: Data Loading
-with st.sidebar.expander("📁 1. Data Loading", expanded=True):
+with st.sidebar.expander("📁 1. Data Loading", expanded=False):
     st.markdown("**Original Measurement Parameters**")
     flux_orig = st.number_input(
         "Original Flux (n/cm²/s)",
@@ -209,33 +276,27 @@ with st.sidebar.expander("📁 1. Data Loading", expanded=True):
     )
 
 # Stage 2: Convolution
-with st.sidebar.expander("🔊 2. Instrument Response", expanded=True):
+with st.sidebar.expander("🔊 2. Instrument Response", expanded=False):
     apply_convolution = st.checkbox("Apply Convolution", value=True)
 
     if apply_convolution:
-        pulse_duration = st.slider(
+        pulse_duration = st.number_input(
             "Pulse Duration (µs)",
-            min_value=50,
-            max_value=500,
-            value=200,
-            step=10,
-            help="Instrument pulse duration in microseconds"
+            min_value=0.0,
+            max_value=5000.0,
+            value=200.0,
+            step=10.0,
+            format="%.1f",
+            help="Instrument pulse duration in microseconds (0-5000 µs)"
         )
-
-        bin_width = st.slider(
-            "Bin Width (µs)",
-            min_value=5,
-            max_value=20,
-            value=10,
-            step=1,
-            help="Time bin width"
-        )
+        bin_width = 10  # Fixed at 10 µs
+        st.caption("Bin Width: 10 µs (fixed)")
     else:
         pulse_duration = None
         bin_width = 10
 
 # Stage 3: Poisson Sampling
-with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=True):
+with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
     apply_poisson = st.checkbox("Apply Poisson", value=True)
 
     if apply_poisson:
@@ -250,23 +311,51 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=True):
             help="Scaled flux condition"
         )
 
-        freq_new = st.slider(
-            "New Frequency (Hz)",
-            min_value=10,
-            max_value=100,
-            value=60,
-            step=5,
-            help="New pulse frequency"
+        # Frame time definition
+        st.markdown("**Frame Time**")
+        frame_time_mode = st.radio(
+            "Define by",
+            ["Frequency (Hz)", "Time (ms)"],
+            help="Define frame time by frequency or directly in milliseconds"
         )
 
-        measurement_time = st.slider(
-            "Measurement Time (min)",
-            min_value=1,
-            max_value=60,
-            value=30,
-            step=1,
-            help="New measurement duration"
+        if frame_time_mode == "Frequency (Hz)":
+            freq_new = st.slider(
+                "Frequency (Hz)",
+                min_value=10,
+                max_value=100,
+                value=20,
+                step=1,
+                help="Pulse frequency (10-100 Hz)"
+            )
+            # Calculate frame time in ms from frequency
+            frame_time_ms = 1000.0 / freq_new
+            st.caption(f"Frame time: {frame_time_ms:.1f} ms")
+        else:  # Time (ms)
+            frame_time_ms = st.number_input(
+                "Frame Time (ms)",
+                min_value=10.0,
+                max_value=100.0,
+                value=50.0,
+                step=1.0,
+                format="%.1f",
+                help="Frame time in milliseconds (10-100 ms)"
+            )
+            # Calculate frequency from frame time
+            freq_new = int(1000.0 / frame_time_ms)
+            st.caption(f"Frequency: {freq_new} Hz")
+
+        measurement_time_hours = st.number_input(
+            "Measurement Time (hours)",
+            min_value=0.5,
+            max_value=240.0,
+            value=8.0,
+            step=0.5,
+            format="%.1f",
+            help="New measurement duration in hours (0.5-240 hours)"
         )
+        # Convert hours to minutes for internal use
+        measurement_time = measurement_time_hours * 60
 
         seed_poisson = st.number_input(
             "Random Seed",
@@ -275,50 +364,135 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=True):
             value=42,
             help="For reproducibility"
         )
+
+        # Calculate and display duty cycle
+        if apply_convolution and pulse_duration is not None:
+            # Pulsed source duty cycle
+            flux_ratio = flux_new / flux_orig
+            time_ratio = (measurement_time_hours) / duration_orig
+            duty_cycle_pulsed = flux_ratio * time_ratio * freq_new * (pulse_duration / 1e6)
+            duty_cycle_percent = duty_cycle_pulsed * 100
+            st.info(f"💡 Duty Cycle: {duty_cycle_percent:.4f}%")
+        else:
+            # Continuous source duty cycle
+            flux_ratio = flux_new / flux_orig
+            time_ratio = measurement_time_hours / duration_orig
+            duty_cycle_continuous = flux_ratio * time_ratio
+            duty_cycle_percent = duty_cycle_continuous * 100
+            st.info(f"💡 Duty Cycle: {duty_cycle_percent:.4f}% (continuous source)")
     else:
         flux_new = None
         freq_new = None
         measurement_time = None
+        measurement_time_hours = None
         seed_poisson = None
+        frame_time_ms = None
 
 # Stage 4: Frame Overlap
-with st.sidebar.expander("🔄 4. Frame Overlap", expanded=True):
+with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
     apply_overlap = st.checkbox("Apply Overlap", value=True)
 
     if apply_overlap:
-        n_frames = st.slider(
-            "Number of Frames",
-            min_value=2,
-            max_value=4,
-            value=2,
-            help="Number of overlapping frames"
+        # Get frame time from Poisson settings
+        if apply_poisson and 'frame_time_ms' in locals():
+            max_frame_time = frame_time_ms
+        else:
+            max_frame_time = 50.0  # Default if Poisson not applied
+
+        st.caption(f"Frame time: {max_frame_time:.1f} ms (from Poisson settings)")
+
+        # Kernel input mode
+        kernel_mode = st.radio(
+            "Kernel Input Mode",
+            ["Auto-generate", "Manual"],
+            help="Choose whether to auto-generate kernel or input manually"
         )
 
-        if n_frames == 2:
-            frame_spacing = st.slider(
-                "Frame Spacing (ms)",
-                min_value=10,
-                max_value=40,
-                value=25,
-                step=1,
-                help="Time between frame starts"
+        if kernel_mode == "Manual":
+            # Manual kernel input (time differences)
+            kernel_str = st.text_input(
+                "Kernel Time Differences (comma-separated, ms)",
+                value="0,25",
+                help="Enter time differences between frames in ms, e.g., '0,12.5,12.5,12.5' for 4 equally spaced frames in 50ms"
             )
-            kernel = [0, frame_spacing]
-            total_time = frame_spacing * 2
-        elif n_frames == 3:
-            spacing_1 = st.slider("Frame 1→2 (ms)", 10, 30, 15, 1)
-            spacing_2 = st.slider("Frame 2→3 (ms)", 10, 30, 15, 1)
-            kernel = [0, spacing_1, spacing_1 + spacing_2]
-            total_time = spacing_1 + spacing_2 + 20
-        else:  # 4 frames
-            spacing = st.slider("Frame Spacing (ms)", 8, 20, 12, 1)
-            kernel = [0, spacing, spacing*2, spacing*3]
-            total_time = spacing * 4
+            try:
+                kernel = [float(x.strip()) for x in kernel_str.split(',')]
+                n_frames = len(kernel)
+                # Convert differences to absolute times for overlap() function
+                kernel_absolute = [sum(kernel[:i+1]) for i in range(len(kernel))]
+                total_time = kernel_absolute[-1] + 20 if kernel_absolute else 50
+                st.success(f"✓ {n_frames} frames at: {[round(t, 1) for t in kernel_absolute]} ms")
+            except ValueError:
+                st.error("Invalid kernel format. Use comma-separated numbers.")
+                kernel = [0, 25]
+                kernel_absolute = [0, 25]
+                n_frames = 2
+                total_time = 50
 
-        st.info(f"Kernel: {kernel} ms")
+        else:  # Auto-generate mode
+            # Spacing type
+            spacing_type = st.radio(
+                "Spacing Type",
+                ["Equal", "Random"],
+                help="Equal spacing or random spacing between frames"
+            )
+
+            # Number of frames
+            n_frames = st.slider(
+                "Number of Frames",
+                min_value=2,
+                max_value=10,
+                value=2,
+                help="Number of overlapping frames"
+            )
+
+            # Generate kernel based on spacing type
+            if spacing_type == "Equal":
+                # Equally spaced frames - time differences
+                if n_frames > 1:
+                    spacing = max_frame_time / n_frames
+                    kernel = [0.0] + [round(spacing, 2)] * (n_frames - 1)
+                else:
+                    kernel = [0.0]
+            else:  # Random
+                # Randomly spaced frames with seed for reproducibility
+                seed_kernel = seed_poisson if seed_poisson is not None else 42
+                np.random.seed(seed_kernel)
+                if n_frames > 1:
+                    # Generate random time differences that sum to max_frame_time
+                    # Use Dirichlet distribution for random partitioning
+                    random_fractions = np.random.dirichlet([1] * n_frames)
+                    time_differences = random_fractions * max_frame_time
+                    # First frame always at 0
+                    kernel = [0.0] + [round(diff, 1) for diff in time_differences[1:]]
+                else:
+                    kernel = [0.0]
+
+            # Display generated kernel in editable field
+            kernel_str_generated = ','.join([str(k) for k in kernel])
+            kernel_str_edited = st.text_input(
+                "Generated Kernel Time Differences (editable, ms)",
+                value=kernel_str_generated,
+                help="Auto-generated time differences - you can edit if needed"
+            )
+
+            # Parse edited kernel
+            try:
+                kernel = [float(x.strip()) for x in kernel_str_edited.split(',')]
+                n_frames = len(kernel)
+            except ValueError:
+                st.error("Invalid kernel format. Using auto-generated values.")
+
+            # Convert differences to absolute times for overlap() function
+            kernel_absolute = [sum(kernel[:i+1]) for i in range(len(kernel))]
+            total_time = kernel_absolute[-1] + 20 if kernel_absolute else 50
+
+            st.info(f"📊 Time differences: {kernel} ms → Frames at: {[round(t, 1) for t in kernel_absolute]} ms")
     else:
         kernel = None
+        kernel_absolute = None
         total_time = None
+        n_frames = 1
 
 # Stage 5: Reconstruction
 with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
@@ -365,11 +539,12 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
         recon_params = {}
         tmin, tmax = None, None
 
-# Process button
-process_button = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True)
+# Process button at the bottom (duplicate for convenience)
+st.sidebar.markdown("---")
+process_button_bottom = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True, key="run_bottom")
 
 # Main content area
-if process_button:
+if process_button or process_button_bottom:
     with st.spinner("Processing pipeline..."):
         try:
             # Create workflow
@@ -387,7 +562,7 @@ if process_button:
                 st.sidebar.success(f"✓ Poisson (flux: {flux_new:.1e})")
 
             if apply_overlap:
-                data.overlap(kernel=kernel, total_time=total_time)
+                data.overlap(kernel=kernel_absolute, total_time=total_time)
                 st.sidebar.success(f"✓ Overlap ({n_frames} frames)")
 
             st.session_state.workflow_data = data
@@ -412,31 +587,61 @@ if st.session_state.workflow_data is not None:
     data = st.session_state.workflow_data
 
     # Create tabs for different views
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["📊 Signal", "📈 Transmission", "🔍 Reconstruction", "📉 Statistics", "🔁 GroupBy"])
+    tab1, tab2, tab3, tab4 = st.tabs(["📊 Signal / Transmission", "🔍 Reconstruction", "📉 Statistics", "🔁 GroupBy"])
 
     with tab1:
-        st.header("Signal Processing Stages")
+        st.header("Signal / Transmission")
 
         col1, col2 = st.columns([3, 1])
 
         with col1:
-            show_stages = st.checkbox("Show All Stages", value=True)
-            show_errors = st.checkbox("Show Error Bars", value=False)
+            # Controls row 1: Plot type and stages
+            ctrl_col1, ctrl_col2, ctrl_col3, ctrl_col4 = st.columns(4)
 
-            # Use Data.plot() method
-            mpl_fig = data.plot(kind='signal', show_stages=show_stages,
-                               show_errors=show_errors, figsize=(12, 6))
+            with ctrl_col1:
+                plot_kind = st.radio(
+                    "View",
+                    ["signal", "transmission"],
+                    format_func=lambda x: "Signal" if x == "signal" else "Transmission",
+                    horizontal=True
+                )
 
-            # Convert to Plotly for interactivity
-            plotly_fig = mpl_to_plotly(mpl_fig)
-            st.plotly_chart(plotly_fig, use_container_width=True)
-            plt.close(mpl_fig)
+            with ctrl_col2:
+                show_stages = st.checkbox("Show All Stages", value=True)
+
+            with ctrl_col3:
+                show_errors = st.checkbox("Show Error Bars", value=False)
+
+            with ctrl_col4:
+                log_scale = st.checkbox("Log Scale (Y)", value=False)
+
+            # Generate plot
+            if plot_kind == "transmission" and data.op_data is None:
+                st.warning("No openbeam data available for transmission calculation.")
+            else:
+                # Use Data.plot() method
+                if plot_kind == 'transmission':
+                    mpl_fig = data.plot(kind='transmission', show_stages=show_stages,
+                                       show_errors=show_errors, figsize=(12, 6), ylim=(0, 1))
+                else:
+                    mpl_fig = data.plot(kind='signal', show_stages=show_stages,
+                                       show_errors=show_errors, figsize=(12, 6))
+
+                # Convert to Plotly for interactivity
+                plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors)
+
+                # Apply log scale if requested
+                if log_scale:
+                    plotly_fig.update_yaxes(type="log")
+
+                st.plotly_chart(plotly_fig, use_container_width=True)
+                plt.close(mpl_fig)
 
         with col2:
             st.markdown("**Current Stage Info**")
             if data.overlapped_data is not None:
                 st.metric("Stage", "Overlapped")
-                st.metric("Frames", len(kernel) if kernel else "N/A")
+                st.metric("Frames", len(kernel_absolute) if kernel_absolute else "N/A")
                 st.metric("Data Points", len(data.overlapped_data))
             elif data.poissoned_data is not None:
                 st.metric("Stage", "Poissoned")
@@ -449,45 +654,48 @@ if st.session_state.workflow_data is not None:
                 st.metric("Data Points", len(data.data))
 
     with tab2:
-        st.header("Transmission")
-
-        if data.op_data is not None:
-            # Use Data.plot() method for transmission with ylim=(0, 1)
-            mpl_fig = data.plot(kind='transmission', show_errors=show_errors,
-                               figsize=(12, 6), ylim=(0, 1))
-
-            # Convert to Plotly for interactivity
-            plotly_fig = mpl_to_plotly(mpl_fig)
-            st.plotly_chart(plotly_fig, use_container_width=True)
-            plt.close(mpl_fig)
-        else:
-            st.warning("No openbeam data available for transmission calculation.")
-
-    with tab3:
         st.header("Reconstruction Results")
 
         if st.session_state.recon is not None:
             recon = st.session_state.recon
 
-            # Choose plot type
-            plot_type = st.radio(
-                "Plot Type",
-                ["transmission", "signal"],
-                format_func=lambda x: "Transmission" if x == "transmission" else "Signal",
-                horizontal=True
-            )
+            # Controls
+            ctrl_col1, ctrl_col2, ctrl_col3 = st.columns(3)
 
-            # Use Reconstruct.plot() method
-            mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors, figsize=(12, 8))
+            with ctrl_col1:
+                plot_type = st.radio(
+                    "Plot Type",
+                    ["transmission", "signal"],
+                    format_func=lambda x: "Transmission" if x == "transmission" else "Signal",
+                    horizontal=True
+                )
+
+            with ctrl_col2:
+                show_errors_recon = st.checkbox("Show Error Bars", value=True, key="recon_errors")
+
+            with ctrl_col3:
+                recon_log_scale = st.checkbox("Log Scale (Y)", value=False, key="recon_log")
+
+            # Use Reconstruct.plot() method with ylim for transmission
+            if plot_type == 'transmission':
+                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors_recon,
+                                    figsize=(12, 8), ylim=(0, 1))
+            else:
+                mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors_recon, figsize=(12, 8))
 
             # Convert to Plotly for interactivity
-            plotly_fig = mpl_to_plotly(mpl_fig)
+            plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_recon)
+
+            # Apply log scale if requested (only to top plot)
+            if recon_log_scale:
+                plotly_fig.update_yaxes(type="log", row=1, col=1)
+
             st.plotly_chart(plotly_fig, use_container_width=True)
             plt.close(mpl_fig)
         else:
             st.info("Run reconstruction to see results here.")
 
-    with tab4:
+    with tab3:
         st.header("Statistics & Metrics")
 
         col1, col2 = st.columns(2)
@@ -504,7 +712,7 @@ if st.session_state.workflow_data is not None:
                     f"{pulse_duration} µs" if pulse_duration else "N/A",
                     f"{flux_new:.2e} n/cm²/s" if flux_new else "N/A",
                     f"{freq_new} Hz" if freq_new else "N/A",
-                    f"{len(kernel)}" if kernel else "1"
+                    f"{len(kernel_absolute)}" if kernel_absolute else "1"
                 ]
             })
             st.dataframe(params_df, hide_index=True, use_container_width=True)
@@ -537,14 +745,18 @@ if st.session_state.workflow_data is not None:
             else:
                 st.info("No reconstruction statistics available yet.")
 
-    with tab5:
+    with tab4:
         st.header("GroupBy - Parameter Sweep")
 
         if st.session_state.recon is not None:
             st.markdown("""
             Run a parameter sweep to explore how different parameter values affect reconstruction quality.
-            This uses the Workflow's `groupby()` method to automatically sweep through parameter ranges.
             """)
+
+            # Run sweep button at the top
+            run_sweep = st.button("🚀 Run Parameter Sweep", type="primary", use_container_width=True, key="run_sweep_top")
+
+            st.markdown("---")
 
             col1, col2 = st.columns([1, 2])
 
@@ -557,6 +769,9 @@ if st.session_state.workflow_data is not None:
                     'noise_power': 'Noise Power',
                     'iterations': 'Lucy-Richardson Iterations',
                     'flux': 'Flux (n/cm²/s)',
+                    'freq': 'Frequency (Hz)',
+                    'n_frames': 'Number of Frames (equally spaced)',
+                    'n_frames_random': 'Number of Frames (random spacing)',
                 }
 
                 param_to_sweep = st.selectbox(
@@ -575,6 +790,9 @@ if st.session_state.workflow_data is not None:
                     'noise_power': (0.001, 0.1, 0.01),
                     'iterations': (5, 50, 5),
                     'flux': (1e5, 5e6, 5e5),
+                    'freq': (10, 100, 10),
+                    'n_frames': (2, 5, 1),
+                    'n_frames_random': (2, 5, 1),
                 }
 
                 low_default, high_default, step_default = default_ranges.get(
@@ -618,11 +836,10 @@ if st.session_state.workflow_data is not None:
                 st.markdown("**Plot Configuration**")
                 y_param_options = {
                     'chi2': 'χ² (Chi-squared)',
-                    'redchi2': 'χ²/dof (Reduced Chi-squared)',
-                    'aic': 'AIC (Akaike Information Criterion)',
-                    'bic': 'BIC (Bayesian Information Criterion)',
-                    'param_thickness': 'Fitted Thickness',
-                    'param_N0': 'Fitted N0',
+                    'chi2_per_dof': 'χ²/dof (Reduced Chi-squared)',
+                    'rmse': 'RMSE (Root Mean Square Error)',
+                    'nrmse': 'NRMSE (Normalized RMSE)',
+                    'r_squared': 'R² (Coefficient of Determination)',
                 }
 
                 y_param = st.selectbox(
@@ -632,64 +849,127 @@ if st.session_state.workflow_data is not None:
                     help="Select which metric to plot"
                 )
 
-                # Run sweep button
-                run_sweep = st.button("🚀 Run Parameter Sweep", type="primary", use_container_width=True)
+                # Duplicate run button at bottom for convenience
+                st.markdown("---")
+                run_sweep_bottom = st.button("🚀 Run Parameter Sweep", type="primary", use_container_width=True, key="run_sweep_bottom")
 
             with col2:
                 st.subheader("Results")
 
-                if run_sweep:
+                if run_sweep or run_sweep_bottom:
                     # Initialize session state for sweep results
                     if 'sweep_results' not in st.session_state:
                         st.session_state.sweep_results = None
 
                     with st.spinner(f"Running parameter sweep for {sweep_params[param_to_sweep]}..."):
                         try:
-                            # Create a fresh workflow from the current configuration
-                            wf = Workflow(signal_path, openbeam_path,
-                                        flux=flux_orig, duration=duration_orig, freq=freq_orig)
-
-                            # Apply all the stages as configured
-                            if apply_convolution:
-                                wf.convolute(pulse_duration if param_to_sweep != 'pulse_duration' else None,
-                                           bin_width=bin_width)
-
-                            if apply_poisson:
-                                wf.poisson(flux=flux_new if param_to_sweep != 'flux' else None,
-                                         freq=freq_new, measurement_time=measurement_time,
-                                         seed=seed_poisson)
-
-                            if apply_overlap:
-                                wf.overlap(kernel=kernel)
-
-                            # Set up groupby
+                            # Manual sweep without Analysis (simpler and doesn't fail)
+                            # We don't use Workflow here - just manual loop with Data and Reconstruct
+                            # Get sweep parameter values
                             if use_num_points:
-                                wf.groupby(param_to_sweep, low=low_val, high=high_val, num=num_points)
+                                param_values = np.linspace(low_val, high_val, num_points)
                             else:
-                                wf.groupby(param_to_sweep, low=low_val, high=high_val, step=step_val)
+                                param_values = np.arange(low_val, high_val + step_val/2, step_val)
 
-                            # Reconstruct
-                            if param_to_sweep == 'noise_power':
-                                wf.reconstruct(kind='wiener', tmin=tmin, tmax=tmax)
-                            elif param_to_sweep == 'iterations':
-                                wf.reconstruct(kind='lucy', tmin=tmin, tmax=tmax)
-                            else:
-                                wf.reconstruct(kind=recon_method, tmin=tmin, tmax=tmax, **recon_params)
-
-                            # Analyze (requires xs parameter)
-                            wf.analyze(xs='iron')
-
-                            # Progress bar placeholder
+                            # Progress bar
                             progress_placeholder = st.empty()
                             progress_bar = progress_placeholder.progress(0.0)
 
-                            # Run the sweep
-                            results_df = wf.run(progress_bar=False)
+                            results = []
+                            recon_objects = []  # Store reconstruction objects for individual viewing
+
+                            for i, value in enumerate(param_values):
+                                try:
+                                    # Reload data
+                                    data_sweep = Data(signal_path, openbeam_path,
+                                                     flux=flux_orig, duration=duration_orig, freq=freq_orig)
+
+                                    # Apply stages
+                                    if apply_convolution:
+                                        if param_to_sweep == 'pulse_duration':
+                                            data_sweep.convolute_response(value, bin_width=bin_width)
+                                        else:
+                                            data_sweep.convolute_response(pulse_duration, bin_width=bin_width)
+
+                                    if apply_poisson:
+                                        if param_to_sweep == 'flux':
+                                            data_sweep.poisson_sample(flux=value, freq=freq_new,
+                                                                     measurement_time=measurement_time, seed=seed_poisson)
+                                        elif param_to_sweep == 'freq':
+                                            data_sweep.poisson_sample(flux=flux_new, freq=int(value),
+                                                                     measurement_time=measurement_time, seed=seed_poisson)
+                                        else:
+                                            data_sweep.poisson_sample(flux=flux_new, freq=freq_new,
+                                                                     measurement_time=measurement_time, seed=seed_poisson)
+
+                                    if apply_overlap:
+                                        # Handle n_frames sweeps
+                                        if param_to_sweep == 'n_frames':
+                                            # Equally spaced frames
+                                            n = int(value)
+                                            # Use existing spacing from kernel differences or default
+                                            spacing = kernel[1] if len(kernel) > 1 else 25
+                                            sweep_kernel = [i * spacing for i in range(n)]
+                                            data_sweep.overlap(kernel=sweep_kernel)
+                                        elif param_to_sweep == 'n_frames_random':
+                                            # Randomly spaced frames
+                                            n = int(value)
+                                            np.random.seed(seed_poisson if seed_poisson else 42)  # Reproducible random
+                                            max_time = frame_time_ms if 'frame_time_ms' in locals() else 50  # Use frame time from Poisson
+                                            sweep_kernel = sorted(np.random.uniform(0, max_time, n))
+                                            sweep_kernel[0] = 0  # First frame always at 0
+                                            data_sweep.overlap(kernel=sweep_kernel)
+                                        else:
+                                            data_sweep.overlap(kernel=kernel_absolute)
+
+                                    # Reconstruct
+                                    if param_to_sweep == 'noise_power':
+                                        recon_sweep = Reconstruct(data_sweep, tmin=tmin, tmax=tmax)
+                                        recon_sweep.filter(kind='wiener', noise_power=value)
+                                    elif param_to_sweep == 'iterations':
+                                        recon_sweep = Reconstruct(data_sweep, tmin=tmin, tmax=tmax)
+                                        recon_sweep.filter(kind='lucy', iterations=int(value))
+                                    else:
+                                        recon_sweep = Reconstruct(data_sweep, tmin=tmin, tmax=tmax)
+                                        recon_sweep.filter(kind=recon_method, **recon_params)
+
+                                    # Get reconstruction statistics
+                                    stats = recon_sweep.get_statistics()
+
+                                    results.append({
+                                        param_to_sweep: value,
+                                        'chi2': stats.get('chi2', np.nan),
+                                        'chi2_per_dof': stats.get('chi2_per_dof', np.nan),
+                                        'rmse': stats.get('rmse', np.nan),
+                                        'nrmse': stats.get('nrmse', np.nan),
+                                        'r_squared': stats.get('r_squared', np.nan),
+                                        'n_points': stats.get('n_points', 0)
+                                    })
+
+                                    # Store reconstruction object for individual viewing
+                                    recon_objects.append({
+                                        'value': value,
+                                        'recon': recon_sweep,
+                                        'data': data_sweep
+                                    })
+
+                                except Exception as e:
+                                    st.warning(f"Error at {param_to_sweep}={value:.4g}: {e}")
+                                    results.append({
+                                        param_to_sweep: value,
+                                        'chi2': np.nan,
+                                        'error': str(e)
+                                    })
+
+                                # Update progress
+                                progress_bar.progress((i + 1) / len(param_values))
 
                             # Store results
+                            results_df = pd.DataFrame(results)
                             st.session_state.sweep_results = results_df
+                            st.session_state.sweep_recon_objects = recon_objects
+                            st.session_state.sweep_param_name = param_to_sweep
 
-                            progress_bar.progress(1.0)
                             st.success(f"✅ Sweep completed! Processed {len(results_df)} configurations.")
 
                         except Exception as e:
@@ -705,15 +985,26 @@ if st.session_state.workflow_data is not None:
                     summary_col1, summary_col2, summary_col3 = st.columns(3)
 
                     with summary_col1:
-                        if param_to_sweep in results_df.columns:
-                            best_idx = results_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].idxmax()
-                            best_value = results_df.loc[best_idx, param_to_sweep]
-                            st.metric("Best Value", f"{best_value:.4g}")
+                        if param_to_sweep in results_df.columns and y_param in results_df.columns:
+                            # Drop NaN values before finding best
+                            valid_df = results_df.dropna(subset=[y_param])
+                            if len(valid_df) > 0:
+                                # Minimize chi2, rmse, nrmse; Maximize r_squared
+                                best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].idxmax()
+                                best_value = results_df.loc[best_idx, param_to_sweep]
+                                st.metric("Best Value", f"{best_value:.4g}")
+                            else:
+                                st.metric("Best Value", "N/A")
 
                     with summary_col2:
                         if y_param in results_df.columns:
-                            best_metric = results_df[y_param].min() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].max()
-                            st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
+                            valid_df = results_df.dropna(subset=[y_param])
+                            if len(valid_df) > 0:
+                                # Minimize chi2, rmse, nrmse; Maximize r_squared
+                                best_metric = valid_df[y_param].min() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].max()
+                                st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
+                            else:
+                                st.metric(f"Best {y_param_options[y_param]}", "N/A")
 
                     with summary_col3:
                         st.metric("Total Runs", len(results_df))
@@ -722,6 +1013,7 @@ if st.session_state.workflow_data is not None:
                     if param_to_sweep in results_df.columns and y_param in results_df.columns:
                         fig = go.Figure()
 
+                        # Plot all points (including NaN which will be skipped by plotly)
                         fig.add_trace(go.Scatter(
                             x=results_df[param_to_sweep],
                             y=results_df[y_param],
@@ -731,15 +1023,18 @@ if st.session_state.workflow_data is not None:
                             marker=dict(size=8)
                         ))
 
-                        # Highlight best point
-                        best_idx = results_df[y_param].idxmin() if 'chi2' in y_param or 'aic' in y_param or 'bic' in y_param else results_df[y_param].idxmax()
-                        fig.add_trace(go.Scatter(
-                            x=[results_df.loc[best_idx, param_to_sweep]],
-                            y=[results_df.loc[best_idx, y_param]],
-                            mode='markers',
-                            name='Best',
-                            marker=dict(size=15, color='red', symbol='star')
-                        ))
+                        # Highlight best point (if valid data exists)
+                        valid_df = results_df.dropna(subset=[y_param])
+                        if len(valid_df) > 0:
+                            # Minimize chi2, rmse, nrmse; Maximize r_squared
+                            best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].idxmax()
+                            fig.add_trace(go.Scatter(
+                                x=[results_df.loc[best_idx, param_to_sweep]],
+                                y=[results_df.loc[best_idx, y_param]],
+                                mode='markers',
+                                name='Best',
+                                marker=dict(size=15, color='red', symbol='star')
+                            ))
 
                         fig.update_layout(
                             title=f"{y_param_options[y_param]} vs {sweep_params[param_to_sweep]}",
@@ -764,6 +1059,43 @@ if st.session_state.workflow_data is not None:
                             file_name=f"sweep_{param_to_sweep}_{y_param}.csv",
                             mime="text/csv"
                         )
+
+                    # Individual reconstruction viewer
+                    if 'sweep_recon_objects' in st.session_state and st.session_state.sweep_recon_objects:
+                        st.markdown("---")
+                        st.markdown("### Individual Reconstruction Plots")
+
+                        recon_objs = st.session_state.sweep_recon_objects
+                        param_name = st.session_state.sweep_param_name
+
+                        # Controls for individual viewer
+                        viewer_col1, viewer_col2 = st.columns([3, 1])
+
+                        with viewer_col2:
+                            show_errors_individual = st.checkbox("Show Error Bars", value=True, key="individual_errors")
+
+                        with viewer_col1:
+                            # Slider to select which reconstruction to view
+                            idx = st.slider(
+                                f"Select {sweep_params.get(param_name, param_name)}",
+                                min_value=0,
+                                max_value=len(recon_objs) - 1,
+                                value=0,
+                                format=f"{sweep_params.get(param_name, param_name)} = %.4g"
+                            )
+
+                        selected = recon_objs[idx]
+                        st.markdown(f"**{sweep_params.get(param_name, param_name)}: {selected['value']:.4g}**")
+
+                        # Plot reconstruction
+                        try:
+                            mpl_fig = selected['recon'].plot(kind='transmission', show_errors=show_errors_individual,
+                                                            figsize=(12, 8), ylim=(0, 1))
+                            plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_individual)
+                            st.plotly_chart(plotly_fig, use_container_width=True)
+                            plt.close(mpl_fig)
+                        except Exception as e:
+                            st.error(f"Error plotting reconstruction: {e}")
 
         else:
             st.info("⚠️ Please run a reconstruction first (see Reconstruction tab) before using GroupBy.")
