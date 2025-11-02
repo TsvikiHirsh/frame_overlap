@@ -94,14 +94,14 @@ class Workflow:
         self._recon_params = {}
         self._analysis_params = {}
 
-    def convolute(self, pulse_duration: float, bin_width: float = 10, **kwargs):
+    def convolute(self, pulse_duration: float = None, bin_width: float = 10, **kwargs):
         """
         Convolute with response function.
 
         Parameters
         ----------
-        pulse_duration : float
-            Pulse duration in microseconds
+        pulse_duration : float, optional
+            Pulse duration in microseconds. If None, will be set during parameter sweep.
         bin_width : float
             Bin width in microseconds (default 10)
         **kwargs
@@ -112,7 +112,10 @@ class Workflow:
         self : Workflow
             Returns self for chaining
         """
-        self.data.convolute_response(pulse_duration, bin_width=bin_width, **kwargs)
+        # Store parameters for reconstruction, don't apply yet if pulse_duration is None
+        self._convolute_params = {'bin_width': bin_width, **kwargs}
+        if pulse_duration is not None:
+            self.data.convolute_response(pulse_duration, bin_width=bin_width, **kwargs)
         return self
 
     def poisson(self, flux: float = None, freq: float = None,

@@ -694,7 +694,7 @@ if st.session_state.workflow_data is not None:
                                 if param_to_sweep == 'pulse_duration':
                                     wf.convolute(bin_width=bin_width)  # pulse_duration from sweep
                                 else:
-                                    wf.convolute(pulse_duration, bin_width=bin_width)
+                                    wf.convolute(pulse_duration=pulse_duration, bin_width=bin_width)
 
                             if apply_poisson:
                                 if param_to_sweep == 'flux':
