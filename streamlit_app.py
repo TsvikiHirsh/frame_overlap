@@ -596,6 +596,9 @@ if st.session_state.workflow_data is not None:
                     'noise_power': 'Noise Power',
                     'iterations': 'Lucy-Richardson Iterations',
                     'flux': 'Flux (n/cm²/s)',
+                    'freq': 'Frequency (Hz)',
+                    'n_frames': 'Number of Frames (equally spaced)',
+                    'n_frames_random': 'Number of Frames (random spacing)',
                 }
 
                 param_to_sweep = st.selectbox(
@@ -614,6 +617,9 @@ if st.session_state.workflow_data is not None:
                     'noise_power': (0.001, 0.1, 0.01),
                     'iterations': (5, 50, 5),
                     'flux': (1e5, 5e6, 5e5),
+                    'freq': (10, 100, 10),
+                    'n_frames': (2, 5, 1),
+                    'n_frames_random': (2, 5, 1),
                 }
 
                 low_default, high_default, step_default = default_ranges.get(
@@ -683,48 +689,8 @@ if st.session_state.workflow_data is not None:
 
                     with st.spinner(f"Running parameter sweep for {sweep_params[param_to_sweep]}..."):
                         try:
-                            # Create a fresh workflow from the current configuration
-                            wf = Workflow(signal_path, openbeam_path,
-                                        flux=flux_orig, duration=duration_orig, freq=freq_orig)
-
-                            # Apply all the stages as configured
-                            # When sweeping a parameter, call the method but don't pass that parameter
-                            if apply_convolution:
-                                if param_to_sweep == 'pulse_duration':
-                                    wf.convolute(bin_width=bin_width)  # pulse_duration from sweep
-                                else:
-                                    wf.convolute(pulse_duration=pulse_duration, bin_width=bin_width)
-
-                            if apply_poisson:
-                                if param_to_sweep == 'flux':
-                                    wf.poisson(freq=freq_new, measurement_time=measurement_time,
-                                             seed=seed_poisson)  # flux from sweep
-                                else:
-                                    wf.poisson(flux=flux_new, freq=freq_new,
-                                             measurement_time=measurement_time,
-                                             seed=seed_poisson)
-
-                            if apply_overlap:
-                                wf.overlap(kernel=kernel)
-
-                            # Set up groupby
-                            if use_num_points:
-                                wf.groupby(param_to_sweep, low=low_val, high=high_val, num=num_points)
-                            else:
-                                wf.groupby(param_to_sweep, low=low_val, high=high_val, step=step_val)
-
-                            # Reconstruct - don't pass the swept parameter here, it will be applied in the sweep
-                            if param_to_sweep == 'noise_power':
-                                # Sweeping noise_power, so use wiener but don't pass noise_power
-                                wf.reconstruct(kind='wiener', tmin=tmin, tmax=tmax)
-                            elif param_to_sweep == 'iterations':
-                                # Sweeping iterations, so use lucy but don't pass iterations
-                                wf.reconstruct(kind='lucy', tmin=tmin, tmax=tmax)
-                            else:
-                                # Not sweeping a reconstruction parameter, so pass them normally
-                                wf.reconstruct(kind=recon_method, tmin=tmin, tmax=tmax, **recon_params)
-
                             # Manual sweep without Analysis (simpler and doesn't fail)
+                            # We don't use Workflow here - just manual loop with Data and Reconstruct
                             # Get sweep parameter values
                             if use_num_points:
                                 param_values = np.linspace(low_val, high_val, num_points)
