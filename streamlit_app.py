@@ -49,20 +49,22 @@ def mpl_to_plotly(fig, show_errors=True):
                 # Error bars are typically PolyCollection objects
                 if hasattr(collection, 'get_paths') and len(collection.get_paths()) > 0:
                     # This is likely an error bar fill
-                    for path in collection.get_paths():
-                        vertices = path.vertices
-                        if len(vertices) > 0:
-                            plotly_fig.add_trace(go.Scatter(
-                                x=vertices[:, 0],
-                                y=vertices[:, 1],
-                                mode='lines',
-                                fill='toself',
-                                fillcolor=matplotlib.colors.to_hex(collection.get_facecolor()[0], keep_alpha=True),
-                                line=dict(width=0),
-                                opacity=0.2,
-                                showlegend=False,
-                                hoverinfo='skip'
-                            ))
+                    facecolors = collection.get_facecolor()
+                    if len(facecolors) > 0:
+                        for path in collection.get_paths():
+                            vertices = path.vertices
+                            if len(vertices) > 0:
+                                plotly_fig.add_trace(go.Scatter(
+                                    x=vertices[:, 0],
+                                    y=vertices[:, 1],
+                                    mode='lines',
+                                    fill='toself',
+                                    fillcolor=matplotlib.colors.to_hex(facecolors[0], keep_alpha=True),
+                                    line=dict(width=0),
+                                    opacity=0.2,
+                                    showlegend=False,
+                                    hoverinfo='skip'
+                                ))
 
         # Extract lines from matplotlib (higher zorder)
         for line in ax.get_lines():
@@ -105,20 +107,22 @@ def mpl_to_plotly(fig, show_errors=True):
         if show_errors:
             for collection in ax_top.collections:
                 if hasattr(collection, 'get_paths') and len(collection.get_paths()) > 0:
-                    for path in collection.get_paths():
-                        vertices = path.vertices
-                        if len(vertices) > 0:
-                            plotly_fig.add_trace(go.Scatter(
-                                x=vertices[:, 0],
-                                y=vertices[:, 1],
-                                mode='lines',
-                                fill='toself',
-                                fillcolor=matplotlib.colors.to_hex(collection.get_facecolor()[0], keep_alpha=True),
-                                line=dict(width=0),
-                                opacity=0.2,
-                                showlegend=False,
-                                hoverinfo='skip'
-                            ), row=1, col=1)
+                    facecolors = collection.get_facecolor()
+                    if len(facecolors) > 0:
+                        for path in collection.get_paths():
+                            vertices = path.vertices
+                            if len(vertices) > 0:
+                                plotly_fig.add_trace(go.Scatter(
+                                    x=vertices[:, 0],
+                                    y=vertices[:, 1],
+                                    mode='lines',
+                                    fill='toself',
+                                    fillcolor=matplotlib.colors.to_hex(facecolors[0], keep_alpha=True),
+                                    line=dict(width=0),
+                                    opacity=0.2,
+                                    showlegend=False,
+                                    hoverinfo='skip'
+                                ), row=1, col=1)
 
         for line in ax_top.get_lines():
             xdata = line.get_xdata()
@@ -307,20 +311,45 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
             help="Scaled flux condition"
         )
 
-        freq_new = st.slider(
-            "New Frequency (Hz)",
-            min_value=10,
-            max_value=100,
-            value=60,
-            step=1,
-            help="New pulse frequency (10-100 Hz)"
+        # Frame time definition
+        st.markdown("**Frame Time**")
+        frame_time_mode = st.radio(
+            "Define by",
+            ["Frequency (Hz)", "Time (ms)"],
+            help="Define frame time by frequency or directly in milliseconds"
         )
+
+        if frame_time_mode == "Frequency (Hz)":
+            freq_new = st.slider(
+                "Frequency (Hz)",
+                min_value=10,
+                max_value=100,
+                value=20,
+                step=1,
+                help="Pulse frequency (10-100 Hz)"
+            )
+            # Calculate frame time in ms from frequency
+            frame_time_ms = 1000.0 / freq_new
+            st.caption(f"Frame time: {frame_time_ms:.1f} ms")
+        else:  # Time (ms)
+            frame_time_ms = st.number_input(
+                "Frame Time (ms)",
+                min_value=10.0,
+                max_value=100.0,
+                value=50.0,
+                step=1.0,
+                format="%.1f",
+                help="Frame time in milliseconds (10-100 ms)"
+            )
+            # Calculate frequency from frame time
+            freq_new = int(1000.0 / frame_time_ms)
+            st.caption(f"Frequency: {freq_new} Hz")
 
         measurement_time_hours = st.number_input(
             "Measurement Time (hours)",
             min_value=0.5,
             max_value=240.0,
-            value=0.5,
+            value=8.0,
             step=0.5,
             format="%.1f",
             help="New measurement duration in hours (0.5-240 hours)"
@@ -341,12 +370,21 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
         measurement_time = None
         measurement_time_hours = None
         seed_poisson = None
+        frame_time_ms = None
 
 # Stage 4: Frame Overlap
 with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
     apply_overlap = st.checkbox("Apply Overlap", value=True)
 
     if apply_overlap:
+        # Get frame time from Poisson settings
+        if apply_poisson and 'frame_time_ms' in locals():
+            max_frame_time = frame_time_ms
+        else:
+            max_frame_time = 50.0  # Default if Poisson not applied
+
+        st.caption(f"Frame time: {max_frame_time:.1f} ms (from Poisson settings)")
+
         # Kernel input mode
         kernel_mode = st.radio(
             "Kernel Input Mode",
@@ -355,20 +393,23 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
         )
 
         if kernel_mode == "Manual":
-            # Manual kernel input
+            # Manual kernel input (time differences)
             kernel_str = st.text_input(
-                "Kernel (comma-separated, ms)",
+                "Kernel Time Differences (comma-separated, ms)",
                 value="0,25",
-                help="Enter frame times in ms, e.g., '0,10,25,35'"
+                help="Enter time differences between frames in ms, e.g., '0,12.5,12.5,12.5' for 4 equally spaced frames in 50ms"
             )
             try:
                 kernel = [float(x.strip()) for x in kernel_str.split(',')]
                 n_frames = len(kernel)
-                total_time = max(kernel) + 20 if kernel else 50
-                st.success(f"✓ {n_frames} frames: {kernel} ms")
+                # Convert differences to absolute times for overlap() function
+                kernel_absolute = [sum(kernel[:i+1]) for i in range(len(kernel))]
+                total_time = kernel_absolute[-1] + 20 if kernel_absolute else 50
+                st.success(f"✓ {n_frames} frames at: {[round(t, 1) for t in kernel_absolute]} ms")
             except ValueError:
                 st.error("Invalid kernel format. Use comma-separated numbers.")
                 kernel = [0, 25]
+                kernel_absolute = [0, 25]
                 n_frames = 2
                 total_time = 50
 
@@ -389,38 +430,34 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
                 help="Number of overlapping frames"
             )
 
-            # Max time for kernel
-            max_kernel_time = st.number_input(
-                "Max Time (ms)",
-                min_value=10.0,
-                max_value=200.0,
-                value=50.0,
-                step=10.0,
-                help="Maximum time span for the kernel"
-            )
-
             # Generate kernel based on spacing type
             if spacing_type == "Equal":
-                # Equally spaced frames
-                spacing = max_kernel_time / (n_frames - 1) if n_frames > 1 else max_kernel_time
-                kernel = [round(i * spacing, 2) for i in range(n_frames)]
+                # Equally spaced frames - time differences
+                if n_frames > 1:
+                    spacing = max_frame_time / n_frames
+                    kernel = [0.0] + [round(spacing, 2)] * (n_frames - 1)
+                else:
+                    kernel = [0.0]
             else:  # Random
                 # Randomly spaced frames with seed for reproducibility
                 seed_kernel = seed_poisson if seed_poisson is not None else 42
                 np.random.seed(seed_kernel)
                 if n_frames > 1:
-                    # Generate random positions and sort them
-                    random_positions = np.random.uniform(0, max_kernel_time, n_frames - 1)
-                    kernel = [0.0] + sorted([round(pos, 1) for pos in random_positions])
+                    # Generate random time differences that sum to max_frame_time
+                    # Use Dirichlet distribution for random partitioning
+                    random_fractions = np.random.dirichlet([1] * n_frames)
+                    time_differences = random_fractions * max_frame_time
+                    # First frame always at 0
+                    kernel = [0.0] + [round(diff, 1) for diff in time_differences[1:]]
                 else:
                     kernel = [0.0]
 
             # Display generated kernel in editable field
             kernel_str_generated = ','.join([str(k) for k in kernel])
             kernel_str_edited = st.text_input(
-                "Generated Kernel (editable, ms)",
+                "Generated Kernel Time Differences (editable, ms)",
                 value=kernel_str_generated,
-                help="Auto-generated kernel - you can edit if needed"
+                help="Auto-generated time differences - you can edit if needed"
             )
 
             # Parse edited kernel
@@ -430,11 +467,14 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
             except ValueError:
                 st.error("Invalid kernel format. Using auto-generated values.")
 
-            total_time = max(kernel) + 20 if kernel else 50
+            # Convert differences to absolute times for overlap() function
+            kernel_absolute = [sum(kernel[:i+1]) for i in range(len(kernel))]
+            total_time = kernel_absolute[-1] + 20 if kernel_absolute else 50
 
-            st.info(f"📊 Kernel: {kernel} ms ({n_frames} frames)")
+            st.info(f"📊 Time differences: {kernel} ms → Frames at: {[round(t, 1) for t in kernel_absolute]} ms")
     else:
         kernel = None
+        kernel_absolute = None
         total_time = None
         n_frames = 1
 
@@ -483,8 +523,12 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
         recon_params = {}
         tmin, tmax = None, None
 
+# Process button at the bottom (duplicate for convenience)
+st.sidebar.markdown("---")
+process_button_bottom = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True, key="run_bottom")
+
 # Main content area
-if process_button:
+if process_button or process_button_bottom:
     with st.spinner("Processing pipeline..."):
         try:
             # Create workflow
@@ -502,7 +546,7 @@ if process_button:
                 st.sidebar.success(f"✓ Poisson (flux: {flux_new:.1e})")
 
             if apply_overlap:
-                data.overlap(kernel=kernel, total_time=total_time)
+                data.overlap(kernel=kernel_absolute, total_time=total_time)
                 st.sidebar.success(f"✓ Overlap ({n_frames} frames)")
 
             st.session_state.workflow_data = data
@@ -581,7 +625,7 @@ if st.session_state.workflow_data is not None:
             st.markdown("**Current Stage Info**")
             if data.overlapped_data is not None:
                 st.metric("Stage", "Overlapped")
-                st.metric("Frames", len(kernel) if kernel else "N/A")
+                st.metric("Frames", len(kernel_absolute) if kernel_absolute else "N/A")
                 st.metric("Data Points", len(data.overlapped_data))
             elif data.poissoned_data is not None:
                 st.metric("Stage", "Poissoned")
@@ -652,7 +696,7 @@ if st.session_state.workflow_data is not None:
                     f"{pulse_duration} µs" if pulse_duration else "N/A",
                     f"{flux_new:.2e} n/cm²/s" if flux_new else "N/A",
                     f"{freq_new} Hz" if freq_new else "N/A",
-                    f"{len(kernel)}" if kernel else "1"
+                    f"{len(kernel_absolute)}" if kernel_absolute else "1"
                 ]
             })
             st.dataframe(params_df, hide_index=True, use_container_width=True)
@@ -789,10 +833,14 @@ if st.session_state.workflow_data is not None:
                     help="Select which metric to plot"
                 )
 
+                # Duplicate run button at bottom for convenience
+                st.markdown("---")
+                run_sweep_bottom = st.button("🚀 Run Parameter Sweep", type="primary", use_container_width=True, key="run_sweep_bottom")
+
             with col2:
                 st.subheader("Results")
 
-                if run_sweep:
+                if run_sweep or run_sweep_bottom:
                     # Initialize session state for sweep results
                     if 'sweep_results' not in st.session_state:
                         st.session_state.sweep_results = None
@@ -843,19 +891,20 @@ if st.session_state.workflow_data is not None:
                                         if param_to_sweep == 'n_frames':
                                             # Equally spaced frames
                                             n = int(value)
-                                            spacing = kernel[1] if len(kernel) > 1 else 25  # Use existing spacing or default
+                                            # Use existing spacing from kernel differences or default
+                                            spacing = kernel[1] if len(kernel) > 1 else 25
                                             sweep_kernel = [i * spacing for i in range(n)]
                                             data_sweep.overlap(kernel=sweep_kernel)
                                         elif param_to_sweep == 'n_frames_random':
                                             # Randomly spaced frames
                                             n = int(value)
                                             np.random.seed(seed_poisson if seed_poisson else 42)  # Reproducible random
-                                            max_time = 50  # ms
+                                            max_time = frame_time_ms if 'frame_time_ms' in locals() else 50  # Use frame time from Poisson
                                             sweep_kernel = sorted(np.random.uniform(0, max_time, n))
                                             sweep_kernel[0] = 0  # First frame always at 0
                                             data_sweep.overlap(kernel=sweep_kernel)
                                         else:
-                                            data_sweep.overlap(kernel=kernel)
+                                            data_sweep.overlap(kernel=kernel_absolute)
 
                                     # Reconstruct
                                     if param_to_sweep == 'noise_power':
