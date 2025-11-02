@@ -702,6 +702,8 @@ if st.session_state.workflow_data is not None:
                             progress_bar = progress_placeholder.progress(0.0)
 
                             results = []
+                            recon_objects = []  # Store reconstruction objects for individual viewing
+
                             for i, value in enumerate(param_values):
                                 try:
                                     # Reload data
@@ -719,12 +721,31 @@ if st.session_state.workflow_data is not None:
                                         if param_to_sweep == 'flux':
                                             data_sweep.poisson_sample(flux=value, freq=freq_new,
                                                                      measurement_time=measurement_time, seed=seed_poisson)
+                                        elif param_to_sweep == 'freq':
+                                            data_sweep.poisson_sample(flux=flux_new, freq=int(value),
+                                                                     measurement_time=measurement_time, seed=seed_poisson)
                                         else:
                                             data_sweep.poisson_sample(flux=flux_new, freq=freq_new,
                                                                      measurement_time=measurement_time, seed=seed_poisson)
 
                                     if apply_overlap:
-                                        data_sweep.overlap(kernel=kernel)
+                                        # Handle n_frames sweeps
+                                        if param_to_sweep == 'n_frames':
+                                            # Equally spaced frames
+                                            n = int(value)
+                                            spacing = kernel[1] if len(kernel) > 1 else 25  # Use existing spacing or default
+                                            sweep_kernel = [i * spacing for i in range(n)]
+                                            data_sweep.overlap(kernel=sweep_kernel)
+                                        elif param_to_sweep == 'n_frames_random':
+                                            # Randomly spaced frames
+                                            n = int(value)
+                                            np.random.seed(seed_poisson if seed_poisson else 42)  # Reproducible random
+                                            max_time = 50  # ms
+                                            sweep_kernel = sorted(np.random.uniform(0, max_time, n))
+                                            sweep_kernel[0] = 0  # First frame always at 0
+                                            data_sweep.overlap(kernel=sweep_kernel)
+                                        else:
+                                            data_sweep.overlap(kernel=kernel)
 
                                     # Reconstruct
                                     if param_to_sweep == 'noise_power':
@@ -750,6 +771,13 @@ if st.session_state.workflow_data is not None:
                                         'n_points': stats.get('n_points', 0)
                                     })
 
+                                    # Store reconstruction object for individual viewing
+                                    recon_objects.append({
+                                        'value': value,
+                                        'recon': recon_sweep,
+                                        'data': data_sweep
+                                    })
+
                                 except Exception as e:
                                     st.warning(f"Error at {param_to_sweep}={value:.4g}: {e}")
                                     results.append({
@@ -764,6 +792,8 @@ if st.session_state.workflow_data is not None:
                             # Store results
                             results_df = pd.DataFrame(results)
                             st.session_state.sweep_results = results_df
+                            st.session_state.sweep_recon_objects = recon_objects
+                            st.session_state.sweep_param_name = param_to_sweep
 
                             st.success(f"✅ Sweep completed! Processed {len(results_df)} configurations.")
 
@@ -854,6 +884,36 @@ if st.session_state.workflow_data is not None:
                             file_name=f"sweep_{param_to_sweep}_{y_param}.csv",
                             mime="text/csv"
                         )
+
+                    # Individual reconstruction viewer
+                    if 'sweep_recon_objects' in st.session_state and st.session_state.sweep_recon_objects:
+                        st.markdown("---")
+                        st.markdown("### Individual Reconstruction Plots")
+
+                        recon_objs = st.session_state.sweep_recon_objects
+                        param_name = st.session_state.sweep_param_name
+
+                        # Slider to select which reconstruction to view
+                        idx = st.slider(
+                            f"Select {sweep_params.get(param_name, param_name)}",
+                            min_value=0,
+                            max_value=len(recon_objs) - 1,
+                            value=0,
+                            format=f"{sweep_params.get(param_name, param_name)} = %.4g"
+                        )
+
+                        selected = recon_objs[idx]
+                        st.markdown(f"**{sweep_params.get(param_name, param_name)}: {selected['value']:.4g}**")
+
+                        # Plot reconstruction
+                        try:
+                            mpl_fig = selected['recon'].plot(kind='transmission', show_errors=True,
+                                                            figsize=(12, 8), ylim=(0, 1))
+                            plotly_fig = mpl_to_plotly(mpl_fig)
+                            st.plotly_chart(plotly_fig, use_container_width=True)
+                            plt.close(mpl_fig)
+                        except Exception as e:
+                            st.error(f"Error plotting reconstruction: {e}")
 
         else:
             st.info("⚠️ Please run a reconstruction first (see Reconstruction tab) before using GroupBy.")
