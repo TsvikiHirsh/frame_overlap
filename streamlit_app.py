@@ -440,8 +440,8 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
             # Number of frames
             n_frames = st.slider(
                 "Number of Frames",
-                min_value=2,
-                max_value=10,
+                min_value=1,
+                max_value=20,
                 value=2,
                 help="Number of overlapping frames"
             )
@@ -509,8 +509,8 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
             noise_power = st.slider(
                 "Noise Power",
                 min_value=0.001,
-                max_value=0.2,
-                value=0.01,
+                max_value=1.0,
+                value=0.2,
                 step=0.001,
                 format="%.3f",
                 help="Regularization parameter"
@@ -529,8 +529,8 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
         # Time range filtering
         use_time_filter = st.checkbox("Filter Time Range")
         if use_time_filter:
-            tmin = st.number_input("Min Time (ms)", 0.0, 50.0, 10.0, 0.5)
-            tmax = st.number_input("Max Time (ms)", 0.0, 50.0, 40.0, 0.5)
+            tmin = st.number_input("Min Time (ms)", 0.0, 50.0, 3.7, 0.5)
+            tmax = st.number_input("Max Time (ms)", 0.0, 50.0, 11.0, 0.5)
         else:
             tmin, tmax = None, None
     else:
