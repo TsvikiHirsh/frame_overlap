@@ -1,0 +1,4 @@
+build-essential
+cmake
+g++
+python3-dev
