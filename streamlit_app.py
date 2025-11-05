@@ -17,10 +17,7 @@ import sys
 sys.path.insert(0, 'src')
 from frame_overlap import Data, Reconstruct, Workflow
 
-# Try to import Analysis (requires nbragg), but gracefully handle if not available
 from frame_overlap import Analysis
-NBRAGG_AVAILABLE = True
-NBRAGG_IMPORT_ERROR = ""
 
 # Use Agg backend for matplotlib (non-interactive, for conversion to images)
 import matplotlib
@@ -584,16 +581,10 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
 
 # Stage 6: Analysis (nbragg)
 with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
-    # Show warning if nbragg is not available
-    if not NBRAGG_AVAILABLE:
-        st.warning("⚠️ nbragg is not available. Install with: `pip install nbragg`")
-        st.info(f"Import error: {NBRAGG_IMPORT_ERROR}")
-        apply_analysis = False
-    else:
-        apply_analysis = st.checkbox("Apply nbragg Analysis", value=False,
-                                     help="Fit reconstructed data with nbragg material models")
+    apply_analysis = st.checkbox("Apply nbragg Analysis", value=False,
+                                 help="Fit reconstructed data with nbragg material models")
 
-    if apply_analysis and NBRAGG_AVAILABLE:
+    if apply_analysis:
         st.markdown("**nbragg Model Selection**")
         nbragg_model = st.selectbox(
             "Material Model",
@@ -653,7 +644,7 @@ if process_button or process_button_bottom:
                 st.sidebar.success(f"✓ Reconstructed (χ²/dof: {stats['chi2_per_dof']:.1f})")
 
             # Analysis (nbragg fitting)
-            if apply_analysis and apply_reconstruction and apply_overlap and NBRAGG_AVAILABLE:
+            if apply_analysis and apply_reconstruction and apply_overlap:
                 try:
                     analysis = Analysis(xs=nbragg_model, vary_background=vary_background,
                                        vary_response=vary_response)
@@ -1049,8 +1040,8 @@ if st.session_state.workflow_data is not None:
                     'r_squared': 'R² (Coefficient of Determination)',
                 }
 
-                # Add nbragg parameters if analysis is enabled and available
-                if apply_analysis and NBRAGG_AVAILABLE:
+                # Add nbragg parameters if analysis is enabled
+                if apply_analysis:
                     y_param_options['nbragg_redchi'] = 'nbragg Reduced χ²'
                     y_param_options['nbragg_thickness'] = 'nbragg Thickness (cm)'
 
@@ -1158,8 +1149,8 @@ if st.session_state.workflow_data is not None:
                                         'n_points': stats.get('n_points', 0)
                                     }
 
-                                    # Run nbragg analysis if enabled and available
-                                    if apply_analysis and NBRAGG_AVAILABLE:
+                                    # Run nbragg analysis if enabled
+                                    if apply_analysis:
                                         try:
                                             analysis_sweep = Analysis(xs=nbragg_model,
                                                                      vary_background=vary_background,
