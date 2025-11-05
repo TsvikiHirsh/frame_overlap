@@ -813,8 +813,50 @@ if process_button or process_button_bottom:
                         st.session_state.analysis = None
 
                 except Exception as e:
-                    st.sidebar.warning(f"⚠️ nbragg fit failed: {str(e)}")
+                    st.sidebar.error(f"⚠️ nbragg fit failed: {str(e)}")
                     st.session_state.analysis = None
+
+                    # Show detailed error information
+                    with st.expander("🔍 nbragg Error Details", expanded=True):
+                        st.error(f"**Error Type:** {type(e).__name__}")
+                        st.error(f"**Error Message:** {str(e)}")
+
+                        st.markdown("### Full Traceback")
+                        st.code(traceback.format_exc(), language="text")
+
+                        # Try to diagnose the specific issue
+                        st.markdown("### Diagnostic Checks")
+                        try:
+                            import sys
+                            import importlib.util
+
+                            # Check if nbragg can be found
+                            nbragg_spec = importlib.util.find_spec("nbragg")
+                            if nbragg_spec:
+                                st.success(f"✓ nbragg package found at: {nbragg_spec.origin}")
+                            else:
+                                st.error("✗ nbragg package not found in sys.path")
+                                st.write("sys.path:", sys.path)
+
+                            # Try importing nbragg directly
+                            try:
+                                import nbragg as test_nbragg
+                                st.success(f"✓ nbragg imports successfully (version: {getattr(test_nbragg, '__version__', 'unknown')})")
+
+                                # Check materials
+                                try:
+                                    materials = test_nbragg.materials
+                                    st.success(f"✓ nbragg.materials accessible")
+                                    st.write(f"Available materials: {len(materials)} items")
+                                except Exception as mat_err:
+                                    st.error(f"✗ nbragg.materials failed: {mat_err}")
+
+                            except ImportError as imp_err:
+                                st.error(f"✗ nbragg import failed: {imp_err}")
+                                st.code(traceback.format_exc(), language="text")
+
+                        except Exception as diag_err:
+                            st.error(f"Diagnostic check failed: {diag_err}")
             else:
                 st.session_state.analysis = None
 
