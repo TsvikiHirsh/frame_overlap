@@ -18,16 +18,14 @@ dependencies = [
     "matplotlib>=3.5",
     "lmfit>=1.0",
     "scikit-image>=0.19",
-    "tqdm>=4.60"
+    "tqdm>=4.60",
+    "nbragg>=0.5.0"
 ]
 license = { text = "MIT" }
 keywords = ["neutron", "tof", "deconvolution", "wiener", "optimization", "frame-overlap", "nbragg"]
 
 [project.optional-dependencies]
-nbragg = ["nbragg"]
-lmfit = ["lmfit>=1.0"]
 dev = ["pytest>=7.0", "black", "isort", "sphinx", "sphinx_rtd_theme"]
-all = ["nbragg", "lmfit>=1.0"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}
