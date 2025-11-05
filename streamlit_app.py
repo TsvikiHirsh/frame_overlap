@@ -22,6 +22,42 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
+# Constants for neutron time-of-flight conversions
+SPEED_OF_LIGHT = 299792458  # m/s
+MASS_OF_NEUTRON = 939.56542052 * 1e6 / (SPEED_OF_LIGHT ** 2)  # [eV s²/m²]
+PLANCK_CONSTANT = 6.62607015e-34  # J·s
+EV_TO_JOULE = 1.602176634e-19  # eV to Joules
+NEUTRON_MASS_KG = 1.67492749804e-27  # kg
+
+def wavelength_to_tof(wavelength_angstrom, flight_path_length_m):
+    """
+    Convert neutron wavelength to time-of-flight.
+
+    Parameters
+    ----------
+    wavelength_angstrom : float or array
+        Wavelength in Angstroms
+    flight_path_length_m : float
+        Flight path length in meters
+
+    Returns
+    -------
+    float or array
+        Time-of-flight in microseconds
+    """
+    # Convert wavelength from Angstrom to meters
+    wavelength_m = wavelength_angstrom * 1e-10
+
+    # de Broglie relation: λ = h / (m * v)
+    # v = h / (m * λ)
+    velocity = PLANCK_CONSTANT / (NEUTRON_MASS_KG * wavelength_m)
+
+    # t = L / v
+    tof_seconds = flight_path_length_m / velocity
+
+    # Convert to microseconds
+    return tof_seconds * 1e6
+
 def mpl_to_plotly(fig, show_errors=True):
     """
     Convert matplotlib figure to plotly figure for interactivity.
@@ -610,7 +646,24 @@ if process_button or process_button_bottom:
                 try:
                     analysis = Analysis(xs=nbragg_model, vary_background=vary_background,
                                        vary_response=vary_response)
-                    result = analysis.fit(recon)
+
+                    # Prepare nbragg data and clean NaN/Inf values (critical for fitting!)
+                    nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
+
+                    # Remove NaN values
+                    nbragg_data.table = nbragg_data.table.dropna()
+
+                    # Remove inf values (can occur from division by zero in transmission calculation)
+                    nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['trans'])]
+                    nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['err'])]
+
+                    # Remove zero or negative errors
+                    nbragg_data.table = nbragg_data.table[nbragg_data.table['err'] > 0]
+
+                    # Fit using the cleaned data directly with the model
+                    result = analysis.model.fit(nbragg_data)
+                    analysis.result = result
+                    analysis.data = nbragg_data
 
                     # Check if result is valid (has redchi attribute and it's not NaN)
                     if hasattr(result, 'redchi') and not pd.isna(result.redchi):
@@ -745,14 +798,12 @@ if st.session_state.workflow_data is not None:
 
                         # Get nbragg best fit data
                         # The wavelength array that corresponds to best_fit is in result.userkws['wl']
-                        wavelength = result.userkws['wl']  # in Angstroms
+                        wavelength_angstrom = result.userkws['wl']  # in Angstroms
                         best_fit_transmission = result.best_fit
 
-                        # Convert wavelength to time in ms
-                        # For neutrons: t (µs) = wavelength (Å) * L (m) * 252.778
-                        # Assuming L=9.0 m (flight path)
-                        L = 9.0  # meters
-                        time_us = wavelength * L * 252.778  # time in microseconds
+                        # Convert wavelength to time-of-flight using proper physics
+                        L = 9.0  # Flight path in meters (default)
+                        time_us = wavelength_to_tof(wavelength_angstrom, L)  # time in microseconds
                         time_ms = time_us / 1000  # time in milliseconds
 
                         # Plot nbragg fit on the same axes
@@ -760,8 +811,15 @@ if st.session_state.workflow_data is not None:
                                    label='nbragg fit', color='green', linewidth=2, linestyle='--')
                         ax_data.legend()
 
+                        st.success(f"✅ nbragg fit overlay added ({len(best_fit_transmission)} points, {time_ms.min():.2f}-{time_ms.max():.2f} ms)")
+
                 except Exception as e:
-                    st.warning(f"Could not add nbragg fit to plot: {e}")
+                    st.error(f"❌ Could not add nbragg fit to plot: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+            elif plot_type == 'transmission':
+                if st.session_state.analysis is None:
+                    st.info("💡 Enable 'Apply nbragg Analysis' in sidebar (Stage 6) to see the nbragg fit curve")
 
             # Convert to Plotly for interactivity
             plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_recon)
@@ -777,6 +835,12 @@ if st.session_state.workflow_data is not None:
 
     with tab3:
         st.header("Statistics & Metrics")
+
+        # Debug indicator for nbragg analysis
+        if st.session_state.analysis is not None:
+            st.success("✅ nbragg analysis results available")
+        else:
+            st.info("💡 Enable 'Apply nbragg Analysis' in sidebar (Stage 6) to see fit results below")
 
         col1, col2 = st.columns(2)
 
