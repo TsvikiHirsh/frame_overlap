@@ -15,12 +15,48 @@ import io
 # Import frame_overlap
 import sys
 sys.path.insert(0, 'src')
-from frame_overlap import Data, Reconstruct, Workflow
+from frame_overlap import Data, Reconstruct, Workflow, Analysis
 
 # Use Agg backend for matplotlib (non-interactive, for conversion to images)
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+
+# Constants for neutron time-of-flight conversions
+SPEED_OF_LIGHT = 299792458  # m/s
+MASS_OF_NEUTRON = 939.56542052 * 1e6 / (SPEED_OF_LIGHT ** 2)  # [eV s²/m²]
+PLANCK_CONSTANT = 6.62607015e-34  # J·s
+EV_TO_JOULE = 1.602176634e-19  # eV to Joules
+NEUTRON_MASS_KG = 1.67492749804e-27  # kg
+
+def wavelength_to_tof(wavelength_angstrom, flight_path_length_m):
+    """
+    Convert neutron wavelength to time-of-flight.
+
+    Parameters
+    ----------
+    wavelength_angstrom : float or array
+        Wavelength in Angstroms
+    flight_path_length_m : float
+        Flight path length in meters
+
+    Returns
+    -------
+    float or array
+        Time-of-flight in microseconds
+    """
+    # Convert wavelength from Angstrom to meters
+    wavelength_m = wavelength_angstrom * 1e-10
+
+    # de Broglie relation: λ = h / (m * v)
+    # v = h / (m * λ)
+    velocity = PLANCK_CONSTANT / (NEUTRON_MASS_KG * wavelength_m)
+
+    # t = L / v
+    tof_seconds = flight_path_length_m / velocity
+
+    # Convert to microseconds
+    return tof_seconds * 1e6
 
 def mpl_to_plotly(fig, show_errors=True):
     """
@@ -243,6 +279,8 @@ if 'workflow_data' not in st.session_state:
     st.session_state.workflow_data = None
 if 'recon' not in st.session_state:
     st.session_state.recon = None
+if 'analysis' not in st.session_state:
+    st.session_state.analysis = None
 
 # Stage 1: Data Loading
 with st.sidebar.expander("📁 1. Data Loading", expanded=False):
@@ -539,6 +577,33 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
         recon_params = {}
         tmin, tmax = None, None
 
+# Stage 6: Analysis (nbragg)
+with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
+    apply_analysis = st.checkbox("Apply nbragg Analysis", value=False,
+                                 help="Fit reconstructed data with nbragg material models")
+
+    if apply_analysis:
+        st.markdown("**nbragg Model Selection**")
+        nbragg_model = st.selectbox(
+            "Material Model",
+            ["iron", "iron_with_cellulose", "iron_square_response"],
+            index=0,  # Default to "iron"
+            help="Select nbragg cross-section model:\n"
+                 "- iron: Fe_sg229_Iron-alpha (recommended)\n"
+                 "- iron_with_cellulose: Fe_sg225_Iron-gamma + cellulose\n"
+                 "- iron_square_response: Fe_sg225_Iron-gamma with square response"
+        )
+
+        st.markdown("**Fitting Options**")
+        vary_background = st.checkbox("Vary Background", value=True,
+                                     help="Allow background to vary during fitting")
+        vary_response = st.checkbox("Vary Response", value=True,
+                                   help="Allow response function to vary during fitting")
+    else:
+        nbragg_model = "iron"
+        vary_background = True
+        vary_response = True
+
 # Process button at the bottom (duplicate for convenience)
 st.sidebar.markdown("---")
 process_button_bottom = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True, key="run_bottom")
@@ -575,6 +640,44 @@ if process_button or process_button_bottom:
 
                 stats = recon.get_statistics()
                 st.sidebar.success(f"✓ Reconstructed (χ²/dof: {stats['chi2_per_dof']:.1f})")
+
+            # Analysis (nbragg fitting)
+            if apply_analysis and apply_reconstruction and apply_overlap:
+                try:
+                    analysis = Analysis(xs=nbragg_model, vary_background=vary_background,
+                                       vary_response=vary_response)
+
+                    # Prepare nbragg data and clean NaN/Inf values (critical for fitting!)
+                    nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
+
+                    # Remove NaN values
+                    nbragg_data.table = nbragg_data.table.dropna()
+
+                    # Remove inf values (can occur from division by zero in transmission calculation)
+                    nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['trans'])]
+                    nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['err'])]
+
+                    # Remove zero or negative errors
+                    nbragg_data.table = nbragg_data.table[nbragg_data.table['err'] > 0]
+
+                    # Fit using the cleaned data directly with the model
+                    result = analysis.model.fit(nbragg_data)
+                    analysis.result = result
+                    analysis.data = nbragg_data
+
+                    # Check if result is valid (has redchi attribute and it's not NaN)
+                    if hasattr(result, 'redchi') and not pd.isna(result.redchi):
+                        st.session_state.analysis = analysis
+                        st.sidebar.success(f"✓ nbragg fit (χ²/dof: {result.redchi:.2f})")
+                    else:
+                        st.sidebar.warning(f"⚠️ nbragg fit produced invalid results")
+                        st.session_state.analysis = None
+
+                except Exception as e:
+                    st.sidebar.warning(f"⚠️ nbragg fit failed: {str(e)}")
+                    st.session_state.analysis = None
+            else:
+                st.session_state.analysis = None
 
             st.sidebar.success("✅ Pipeline complete!")
 
@@ -671,7 +774,7 @@ if st.session_state.workflow_data is not None:
                 )
 
             with ctrl_col2:
-                show_errors_recon = st.checkbox("Show Error Bars", value=True, key="recon_errors")
+                show_errors_recon = st.checkbox("Show Error Bars", value=False, key="recon_errors")
 
             with ctrl_col3:
                 recon_log_scale = st.checkbox("Log Scale (Y)", value=False, key="recon_log")
@@ -682,6 +785,41 @@ if st.session_state.workflow_data is not None:
                                     figsize=(12, 8), ylim=(0, 1))
             else:
                 mpl_fig = recon.plot(kind=plot_type, show_errors=show_errors_recon, figsize=(12, 8))
+
+            # Add nbragg fit curve if available
+            if st.session_state.analysis is not None and plot_type == 'transmission':
+                try:
+                    result = st.session_state.analysis.result
+
+                    # Get the axes from the reconstruction plot
+                    axes = mpl_fig.get_axes()
+                    if len(axes) >= 1:
+                        ax_data = axes[0]
+
+                        # Get nbragg best fit data
+                        # The wavelength array that corresponds to best_fit is in result.userkws['wl']
+                        wavelength_angstrom = result.userkws['wl']  # in Angstroms
+                        best_fit_transmission = result.best_fit
+
+                        # Convert wavelength to time-of-flight using proper physics
+                        L = 9.0  # Flight path in meters (default)
+                        time_us = wavelength_to_tof(wavelength_angstrom, L)  # time in microseconds
+                        time_ms = time_us / 1000  # time in milliseconds
+
+                        # Plot nbragg fit on the same axes
+                        ax_data.plot(time_ms, best_fit_transmission,
+                                   label='nbragg fit', color='green', linewidth=2, linestyle='--')
+                        ax_data.legend()
+
+                        st.success(f"✅ nbragg fit overlay added ({len(best_fit_transmission)} points, {time_ms.min():.2f}-{time_ms.max():.2f} ms)")
+
+                except Exception as e:
+                    st.error(f"❌ Could not add nbragg fit to plot: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+            elif plot_type == 'transmission':
+                if st.session_state.analysis is None:
+                    st.info("💡 Enable 'Apply nbragg Analysis' in sidebar (Stage 6) to see the nbragg fit curve")
 
             # Convert to Plotly for interactivity
             plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_recon)
@@ -697,6 +835,12 @@ if st.session_state.workflow_data is not None:
 
     with tab3:
         st.header("Statistics & Metrics")
+
+        # Debug indicator for nbragg analysis
+        if st.session_state.analysis is not None:
+            st.success("✅ nbragg analysis results available")
+        else:
+            st.info("💡 Enable 'Apply nbragg Analysis' in sidebar (Stage 6) to see fit results below")
 
         col1, col2 = st.columns(2)
 
@@ -744,6 +888,58 @@ if st.session_state.workflow_data is not None:
                     st.warning(f"⚠️ Poor fit (χ²/dof = {chi2:.2f})")
             else:
                 st.info("No reconstruction statistics available yet.")
+
+        # Show nbragg fit results if available
+        if st.session_state.analysis is not None:
+            st.markdown("---")
+            st.subheader("nbragg Fit Results")
+
+            try:
+                result = st.session_state.analysis.result
+
+                # Show reduced chi-squared
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.metric("Reduced χ² (nbragg)", f"{result.redchi:.4f}")
+
+                with col2:
+                    # Quality indicator for nbragg fit
+                    if result.redchi < 2:
+                        st.success(f"✅ Excellent nbragg fit")
+                    elif result.redchi < 5:
+                        st.info(f"ℹ️ Good nbragg fit")
+                    else:
+                        st.warning(f"⚠️ Poor nbragg fit")
+
+                # Show fit parameters table
+                st.markdown("**Fitted Parameters**")
+
+                # Extract parameters from lmfit result
+                params_data = []
+                for param_name, param in result.params.items():
+                    # Handle stderr which might be None
+                    if param.stderr is not None:
+                        stderr_str = f"{param.stderr:.4e}"
+                    else:
+                        stderr_str = "N/A"
+
+                    params_data.append({
+                        'Parameter': param_name,
+                        'Value': f"{param.value:.4e}",
+                        'Stderr': stderr_str,
+                        'Vary': 'Yes' if param.vary else 'No'
+                    })
+
+                params_table = pd.DataFrame(params_data)
+                st.dataframe(params_table, hide_index=True, use_container_width=True)
+
+                # Show fit report in expander
+                with st.expander("View Full Fit Report"):
+                    fit_report = result.fit_report()
+                    st.text(fit_report)
+
+            except Exception as e:
+                st.error(f"Error displaying nbragg fit results: {e}")
 
     with tab4:
         st.header("GroupBy - Parameter Sweep")
@@ -842,6 +1038,11 @@ if st.session_state.workflow_data is not None:
                     'r_squared': 'R² (Coefficient of Determination)',
                 }
 
+                # Add nbragg parameters if analysis is enabled
+                if apply_analysis:
+                    y_param_options['nbragg_redchi'] = 'nbragg Reduced χ²'
+                    y_param_options['nbragg_thickness'] = 'nbragg Thickness (cm)'
+
                 y_param = st.selectbox(
                     "Y-axis Parameter",
                     options=list(y_param_options.keys()),
@@ -936,7 +1137,7 @@ if st.session_state.workflow_data is not None:
                                     # Get reconstruction statistics
                                     stats = recon_sweep.get_statistics()
 
-                                    results.append({
+                                    result_dict = {
                                         param_to_sweep: value,
                                         'chi2': stats.get('chi2', np.nan),
                                         'chi2_per_dof': stats.get('chi2_per_dof', np.nan),
@@ -944,7 +1145,34 @@ if st.session_state.workflow_data is not None:
                                         'nrmse': stats.get('nrmse', np.nan),
                                         'r_squared': stats.get('r_squared', np.nan),
                                         'n_points': stats.get('n_points', 0)
-                                    })
+                                    }
+
+                                    # Run nbragg analysis if enabled
+                                    if apply_analysis:
+                                        try:
+                                            analysis_sweep = Analysis(xs=nbragg_model,
+                                                                     vary_background=vary_background,
+                                                                     vary_response=vary_response)
+                                            nbragg_result = analysis_sweep.fit(recon_sweep)
+
+                                            # Extract nbragg parameters
+                                            result_dict['nbragg_redchi'] = nbragg_result.redchi
+
+                                            # Try to get thickness parameter (it might be named differently)
+                                            thickness_param = None
+                                            for param_name in nbragg_result.params.keys():
+                                                if 'thickness' in param_name.lower() or 'L' in param_name or 'length' in param_name.lower():
+                                                    thickness_param = nbragg_result.params[param_name].value
+                                                    break
+                                            result_dict['nbragg_thickness'] = thickness_param if thickness_param is not None else np.nan
+                                        except Exception as e_nbragg:
+                                            result_dict['nbragg_redchi'] = np.nan
+                                            result_dict['nbragg_thickness'] = np.nan
+                                    else:
+                                        result_dict['nbragg_redchi'] = np.nan
+                                        result_dict['nbragg_thickness'] = np.nan
+
+                                    results.append(result_dict)
 
                                     # Store reconstruction object for individual viewing
                                     recon_objects.append({
@@ -989,8 +1217,9 @@ if st.session_state.workflow_data is not None:
                             # Drop NaN values before finding best
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                # Minimize chi2, rmse, nrmse; Maximize r_squared
-                                best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].idxmax()
+                                # Minimize chi2, rmse, nrmse, nbragg_redchi; Maximize r_squared
+                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
+                                best_idx = valid_df[y_param].idxmin() if y_param in minimize_params else valid_df[y_param].idxmax()
                                 best_value = results_df.loc[best_idx, param_to_sweep]
                                 st.metric("Best Value", f"{best_value:.4g}")
                             else:
@@ -1000,8 +1229,9 @@ if st.session_state.workflow_data is not None:
                         if y_param in results_df.columns:
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                # Minimize chi2, rmse, nrmse; Maximize r_squared
-                                best_metric = valid_df[y_param].min() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].max()
+                                # Minimize chi2, rmse, nrmse, nbragg_redchi; Maximize r_squared
+                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
+                                best_metric = valid_df[y_param].min() if y_param in minimize_params else valid_df[y_param].max()
                                 st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
                             else:
                                 st.metric(f"Best {y_param_options[y_param]}", "N/A")
@@ -1026,8 +1256,9 @@ if st.session_state.workflow_data is not None:
                         # Highlight best point (if valid data exists)
                         valid_df = results_df.dropna(subset=[y_param])
                         if len(valid_df) > 0:
-                            # Minimize chi2, rmse, nrmse; Maximize r_squared
-                            best_idx = valid_df[y_param].idxmin() if y_param in ['chi2', 'chi2_per_dof', 'rmse', 'nrmse'] else valid_df[y_param].idxmax()
+                            # Minimize chi2, rmse, nrmse, nbragg_redchi; Maximize r_squared
+                            minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
+                            best_idx = valid_df[y_param].idxmin() if y_param in minimize_params else valid_df[y_param].idxmax()
                             fig.add_trace(go.Scatter(
                                 x=[results_df.loc[best_idx, param_to_sweep]],
                                 y=[results_df.loc[best_idx, y_param]],
@@ -1118,13 +1349,20 @@ else:
     - 🎲 **Poisson Sampling**: Apply counting statistics with new flux conditions
     - 🔄 **Frame Overlap**: Create overlapping frames (2-4 frames supported)
     - 🔧 **Reconstruction**: Recover original signal using deconvolution
+    - 🔬 **Analysis (nbragg)**: Fit reconstructed data with material cross-section models
     - 🔁 **GroupBy**: Parameter sweep for optimization and sensitivity analysis
 
-    ## Available Methods
+    ## Reconstruction Methods
 
     - **Wiener Filter**: Fast, works well with known noise
     - **Lucy-Richardson**: Iterative, good for positive-valued data
     - **Tikhonov**: Regularization-based, smooth results
+
+    ## nbragg Models
+
+    - **iron**: Fe_sg229_Iron-alpha (recommended, default)
+    - **iron_with_cellulose**: Fe_sg225_Iron-gamma + cellulose background
+    - **iron_square_response**: Fe_sg225_Iron-gamma with square response function
 
     ## Features
 
