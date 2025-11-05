@@ -11,13 +11,63 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from pathlib import Path
 import io
+import sys
+import traceback
+import subprocess
+import platform
 
 # Import frame_overlap
-import sys
 sys.path.insert(0, 'src')
 from frame_overlap import Data, Reconstruct, Workflow
 
-from frame_overlap import Analysis
+# Try to import Analysis with detailed error reporting
+ANALYSIS_AVAILABLE = False
+ANALYSIS_ERROR = None
+ANALYSIS_ERROR_DETAILS = {}
+
+try:
+    from frame_overlap import Analysis
+    ANALYSIS_AVAILABLE = True
+except Exception as e:
+    ANALYSIS_AVAILABLE = False
+    ANALYSIS_ERROR = str(e)
+    ANALYSIS_ERROR_DETAILS = {
+        'error_type': type(e).__name__,
+        'error_message': str(e),
+        'traceback': traceback.format_exc()
+    }
+
+    # Try to diagnose the issue
+    try:
+        # Check if nbragg package exists
+        import importlib.util
+        nbragg_spec = importlib.util.find_spec("nbragg")
+        ANALYSIS_ERROR_DETAILS['nbragg_found'] = nbragg_spec is not None
+
+        if nbragg_spec:
+            ANALYSIS_ERROR_DETAILS['nbragg_location'] = nbragg_spec.origin if nbragg_spec.origin else "unknown"
+
+        # Try importing nbragg directly
+        try:
+            import nbragg
+            ANALYSIS_ERROR_DETAILS['nbragg_imports'] = True
+            ANALYSIS_ERROR_DETAILS['nbragg_version'] = getattr(nbragg, '__version__', 'unknown')
+        except Exception as nbragg_err:
+            ANALYSIS_ERROR_DETAILS['nbragg_imports'] = False
+            ANALYSIS_ERROR_DETAILS['nbragg_import_error'] = str(nbragg_err)
+            ANALYSIS_ERROR_DETAILS['nbragg_traceback'] = traceback.format_exc()
+
+        # Check if NCrystal is available
+        try:
+            import NCrystal
+            ANALYSIS_ERROR_DETAILS['ncrystal_available'] = True
+            ANALYSIS_ERROR_DETAILS['ncrystal_version'] = NCrystal.__version__
+        except Exception as nc_err:
+            ANALYSIS_ERROR_DETAILS['ncrystal_available'] = False
+            ANALYSIS_ERROR_DETAILS['ncrystal_error'] = str(nc_err)
+
+    except Exception as diag_err:
+        ANALYSIS_ERROR_DETAILS['diagnostic_error'] = str(diag_err)
 
 # Use Agg backend for matplotlib (non-interactive, for conversion to images)
 import matplotlib
@@ -245,6 +295,88 @@ h2 {
 # Title
 st.title("🔬 Frame Overlap Interactive Explorer")
 st.markdown("Explore neutron Time-of-Flight frame overlap analysis step by step!")
+
+# Show diagnostic information if Analysis failed to import
+if not ANALYSIS_AVAILABLE:
+    st.error("⚠️ **nbragg Analysis module failed to import**")
+
+    with st.expander("🔍 Click here to see diagnostic information", expanded=True):
+        st.markdown("### Import Error Details")
+        st.code(ANALYSIS_ERROR, language="text")
+
+        st.markdown("### System Information")
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**Platform:** {platform.system()} {platform.release()}")
+            st.write(f"**Python Version:** {sys.version}")
+        with col2:
+            st.write(f"**Architecture:** {platform.machine()}")
+            st.write(f"**Processor:** {platform.processor()}")
+
+        st.markdown("### Dependency Diagnostics")
+
+        if 'nbragg_found' in ANALYSIS_ERROR_DETAILS:
+            if ANALYSIS_ERROR_DETAILS['nbragg_found']:
+                st.success(f"✓ nbragg package found at: {ANALYSIS_ERROR_DETAILS.get('nbragg_location', 'unknown')}")
+            else:
+                st.error("✗ nbragg package not found in Python path")
+
+        if 'nbragg_imports' in ANALYSIS_ERROR_DETAILS:
+            if ANALYSIS_ERROR_DETAILS['nbragg_imports']:
+                st.success(f"✓ nbragg imports successfully (version: {ANALYSIS_ERROR_DETAILS.get('nbragg_version', 'unknown')})")
+            else:
+                st.error(f"✗ nbragg import failed: {ANALYSIS_ERROR_DETAILS.get('nbragg_import_error', 'unknown error')}")
+                if 'nbragg_traceback' in ANALYSIS_ERROR_DETAILS:
+                    st.code(ANALYSIS_ERROR_DETAILS['nbragg_traceback'], language="text")
+
+        if 'ncrystal_available' in ANALYSIS_ERROR_DETAILS:
+            if ANALYSIS_ERROR_DETAILS['ncrystal_available']:
+                st.success(f"✓ NCrystal available (version: {ANALYSIS_ERROR_DETAILS.get('ncrystal_version', 'unknown')})")
+            else:
+                st.error(f"✗ NCrystal not available: {ANALYSIS_ERROR_DETAILS.get('ncrystal_error', 'unknown error')}")
+
+        st.markdown("### Installed Packages")
+        try:
+            result = subprocess.run([sys.executable, '-m', 'pip', 'list'],
+                                  capture_output=True, text=True, timeout=5)
+            if result.returncode == 0:
+                # Filter for relevant packages
+                packages = result.stdout
+                relevant = []
+                for line in packages.split('\n'):
+                    if any(pkg in line.lower() for pkg in ['nbragg', 'ncrystal', 'lmfit', 'numpy', 'scipy']):
+                        relevant.append(line)
+                if relevant:
+                    st.code('\n'.join(relevant), language="text")
+            else:
+                st.warning("Could not list packages")
+        except Exception as e:
+            st.warning(f"Could not list packages: {e}")
+
+        st.markdown("### Build Tools Check")
+        build_tools = {
+            'gcc': ['gcc', '--version'],
+            'g++': ['g++', '--version'],
+            'cmake': ['cmake', '--version'],
+            'python3-dev': ['python3-config', '--includes']
+        }
+
+        for tool, cmd in build_tools.items():
+            try:
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=2)
+                if result.returncode == 0:
+                    version_line = result.stdout.split('\n')[0] if result.stdout else "installed"
+                    st.success(f"✓ {tool}: {version_line}")
+                else:
+                    st.error(f"✗ {tool}: not available")
+            except FileNotFoundError:
+                st.error(f"✗ {tool}: not found")
+            except Exception as e:
+                st.warning(f"? {tool}: {e}")
+
+        st.markdown("### Full Traceback")
+        if 'traceback' in ANALYSIS_ERROR_DETAILS:
+            st.code(ANALYSIS_ERROR_DETAILS['traceback'], language="text")
 
 # Cache data loading
 @st.cache_data
@@ -581,10 +713,15 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
 
 # Stage 6: Analysis (nbragg)
 with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
-    apply_analysis = st.checkbox("Apply nbragg Analysis", value=False,
-                                 help="Fit reconstructed data with nbragg material models")
+    if not ANALYSIS_AVAILABLE:
+        st.error("⚠️ nbragg not available")
+        st.caption("See diagnostic info in main page")
+        apply_analysis = False
+    else:
+        apply_analysis = st.checkbox("Apply nbragg Analysis", value=False,
+                                     help="Fit reconstructed data with nbragg material models")
 
-    if apply_analysis:
+    if apply_analysis and ANALYSIS_AVAILABLE:
         st.markdown("**nbragg Model Selection**")
         nbragg_model = st.selectbox(
             "Material Model",
@@ -644,7 +781,7 @@ if process_button or process_button_bottom:
                 st.sidebar.success(f"✓ Reconstructed (χ²/dof: {stats['chi2_per_dof']:.1f})")
 
             # Analysis (nbragg fitting)
-            if apply_analysis and apply_reconstruction and apply_overlap:
+            if apply_analysis and apply_reconstruction and apply_overlap and ANALYSIS_AVAILABLE:
                 try:
                     analysis = Analysis(xs=nbragg_model, vary_background=vary_background,
                                        vary_response=vary_response)
@@ -1041,7 +1178,7 @@ if st.session_state.workflow_data is not None:
                 }
 
                 # Add nbragg parameters if analysis is enabled
-                if apply_analysis:
+                if apply_analysis and ANALYSIS_AVAILABLE:
                     y_param_options['nbragg_redchi'] = 'nbragg Reduced χ²'
                     y_param_options['nbragg_thickness'] = 'nbragg Thickness (cm)'
 
@@ -1150,7 +1287,7 @@ if st.session_state.workflow_data is not None:
                                     }
 
                                     # Run nbragg analysis if enabled
-                                    if apply_analysis:
+                                    if apply_analysis and ANALYSIS_AVAILABLE:
                                         try:
                                             analysis_sweep = Analysis(xs=nbragg_model,
                                                                      vary_background=vary_background,
