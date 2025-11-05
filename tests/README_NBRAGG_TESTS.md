@@ -53,6 +53,16 @@ Basic nbragg Analysis class functionality test.
 python tests/test_analysis_integration.py
 ```
 
+### **test_nbragg_fallback.py**
+Tests graceful fallback when nbragg is not available.
+- Tests core imports (Data, Reconstruct, Workflow)
+- Verifies app works without nbragg
+- Useful for testing Streamlit Cloud deployment scenario
+
+```bash
+python tests/test_nbragg_fallback.py
+```
+
 ## 📊 Plot Testing Scripts
 
 ### **test_final_plot.py**

@@ -120,6 +120,15 @@ If you use this package, please cite:
 }
 ```
 
+## Deployment
+
+The interactive Streamlit app can be deployed to Streamlit Cloud. See [DEPLOYMENT.md](DEPLOYMENT.md) for:
+- Deployment instructions
+- nbragg installation troubleshooting
+- Graceful fallback behavior when dependencies are unavailable
+
+**Live App**: https://frame-overlap.streamlit.app
+
 ## License
 
 MIT License - see [LICENSE](LICENSE) file
