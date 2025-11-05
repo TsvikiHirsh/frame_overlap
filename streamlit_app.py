@@ -18,12 +18,9 @@ sys.path.insert(0, 'src')
 from frame_overlap import Data, Reconstruct, Workflow
 
 # Try to import Analysis (requires nbragg), but gracefully handle if not available
-try:
-    from frame_overlap import Analysis
-    NBRAGG_AVAILABLE = True
-except ImportError as e:
-    NBRAGG_AVAILABLE = False
-    NBRAGG_IMPORT_ERROR = str(e)
+from frame_overlap import Analysis
+NBRAGG_AVAILABLE = True
+NBRAGG_IMPORT_ERROR = ""
 
 # Use Agg backend for matplotlib (non-interactive, for conversion to images)
 import matplotlib
