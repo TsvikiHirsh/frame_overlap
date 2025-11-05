@@ -10,6 +10,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from scipy import signal as scipy_signal
 from scipy.stats import poisson
+from . import data_cleaning
 
 
 class Data:
@@ -204,6 +205,133 @@ class Data:
         self.op_data = df[['time', 'counts', 'err']].copy()
         self.openbeam_table = self.op_data  # For backward compatibility
         self.openbeam_file = file_path
+
+        return self
+
+    def load_signal_tiff(self, tiff_path, roi_path=None, fov_cm=1.4, roi_diameter_cm=1.0,
+                        subspace_dimension=None, dataset_type='attenuation', verbose=1):
+        """
+        Load signal data from TIFF stack with mbirjax denoising.
+
+        This method loads a TIFF stack, applies an ROI mask, performs mbirjax
+        hyper_denoise using dehydration/rehydration, and computes the TOF spectrum.
+
+        Parameters
+        ----------
+        tiff_path : str
+            Path to signal TIFF stack file
+        roi_path : str, optional
+            Path to ImageJ ROI file (.roi or .zip). If None, creates a default
+            circular ROI centered in the image.
+        fov_cm : float, optional
+            Field of view in cm (default: 1.4 for 1.4x1.4 cm FOV)
+        roi_diameter_cm : float, optional
+            Diameter of default circular ROI in cm (default: 1.0)
+        subspace_dimension : int, optional
+            Number of dehydration dimensions for mbirjax hyper_denoise.
+            If None, automatically estimated.
+        dataset_type : str, optional
+            Either 'attenuation' or 'transmission' (default: 'attenuation')
+        verbose : int, optional
+            Verbosity level (default: 1)
+
+        Returns
+        -------
+        self
+            Returns self for method chaining
+
+        Examples
+        --------
+        >>> # Load with default circular ROI and auto-estimated dehydration dimension
+        >>> data = Data()
+        >>> data.load_signal_tiff('signal_stack.tif')
+
+        >>> # Load with custom ROI and specified dehydration dimension
+        >>> data.load_signal_tiff('signal_stack.tif', roi_path='my_roi.roi',
+        ...                      subspace_dimension=10)
+
+        >>> # Load with custom ROI size
+        >>> data.load_signal_tiff('signal_stack.tif', fov_cm=1.4, roi_diameter_cm=0.8)
+        """
+        tof_spectrum, metadata = data_cleaning.process_tiff_to_tof(
+            tiff_path, roi_path, fov_cm, roi_diameter_cm,
+            subspace_dimension, dataset_type, verbose
+        )
+
+        # Convert stack to time (each stack is 10 µs)
+        tof_spectrum['time'] = (tof_spectrum['stack']) * 10
+
+        # Store as DataFrame
+        self.data = tof_spectrum[['time', 'counts', 'err']].copy()
+        self.table = self.data  # For backward compatibility
+        self.signal_file = str(tiff_path)
+
+        # Store metadata
+        if not hasattr(self, 'tiff_metadata'):
+            self.tiff_metadata = {}
+        self.tiff_metadata['signal'] = metadata
+
+        return self
+
+    def load_openbeam_tiff(self, tiff_path, roi_path=None, fov_cm=1.4, roi_diameter_cm=1.0,
+                          subspace_dimension=None, dataset_type='attenuation', verbose=1):
+        """
+        Load openbeam data from TIFF stack with mbirjax denoising.
+
+        This method loads a TIFF stack, applies an ROI mask, performs mbirjax
+        hyper_denoise using dehydration/rehydration, and computes the TOF spectrum.
+
+        Parameters
+        ----------
+        tiff_path : str
+            Path to openbeam TIFF stack file
+        roi_path : str, optional
+            Path to ImageJ ROI file (.roi or .zip). If None, creates a default
+            circular ROI centered in the image.
+        fov_cm : float, optional
+            Field of view in cm (default: 1.4 for 1.4x1.4 cm FOV)
+        roi_diameter_cm : float, optional
+            Diameter of default circular ROI in cm (default: 1.0)
+        subspace_dimension : int, optional
+            Number of dehydration dimensions for mbirjax hyper_denoise.
+            If None, automatically estimated.
+        dataset_type : str, optional
+            Either 'attenuation' or 'transmission' (default: 'attenuation')
+        verbose : int, optional
+            Verbosity level (default: 1)
+
+        Returns
+        -------
+        self
+            Returns self for method chaining
+
+        Examples
+        --------
+        >>> # Load openbeam with same ROI as signal
+        >>> data = Data()
+        >>> data.load_signal_tiff('signal_stack.tif', roi_path='my_roi.roi')
+        >>> data.load_openbeam_tiff('openbeam_stack.tif', roi_path='my_roi.roi')
+
+        >>> # Use different dehydration dimension for openbeam
+        >>> data.load_openbeam_tiff('openbeam_stack.tif', subspace_dimension=15)
+        """
+        tof_spectrum, metadata = data_cleaning.process_tiff_to_tof(
+            tiff_path, roi_path, fov_cm, roi_diameter_cm,
+            subspace_dimension, dataset_type, verbose
+        )
+
+        # Convert stack to time (each stack is 10 µs)
+        tof_spectrum['time'] = (tof_spectrum['stack']) * 10
+
+        # Store as DataFrame
+        self.op_data = tof_spectrum[['time', 'counts', 'err']].copy()
+        self.openbeam_table = self.op_data  # For backward compatibility
+        self.openbeam_file = str(tiff_path)
+
+        # Store metadata
+        if not hasattr(self, 'tiff_metadata'):
+            self.tiff_metadata = {}
+        self.tiff_metadata['openbeam'] = metadata
 
         return self
 

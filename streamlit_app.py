@@ -244,6 +244,104 @@ if 'workflow_data' not in st.session_state:
 if 'recon' not in st.session_state:
     st.session_state.recon = None
 
+# Stage 0: Data Cleaning (Optional TIFF preprocessing)
+with st.sidebar.expander("🧹 0. Data Cleaning (Optional)", expanded=False):
+    st.markdown("**Hydration/Dehydration Denoising**")
+    st.caption("Load TIFF stacks and apply mbirjax denoising")
+
+    use_tiff_cleaning = st.checkbox(
+        "Use TIFF with Denoising",
+        value=False,
+        help="Enable to load TIFF stacks instead of CSV files and apply dehydration/rehydration denoising"
+    )
+
+    if use_tiff_cleaning:
+        st.markdown("**Signal TIFF Stack**")
+        signal_tiff_file = st.file_uploader(
+            "Upload Signal TIFF",
+            type=['tif', 'tiff'],
+            key='signal_tiff',
+            help="Multi-frame TIFF stack for signal data"
+        )
+
+        st.markdown("**Openbeam TIFF Stack**")
+        openbeam_tiff_file = st.file_uploader(
+            "Upload Openbeam TIFF",
+            type=['tif', 'tiff'],
+            key='openbeam_tiff',
+            help="Multi-frame TIFF stack for openbeam data"
+        )
+
+        st.markdown("**ROI Configuration**")
+        use_custom_roi = st.checkbox(
+            "Use Custom ROI",
+            value=False,
+            help="Upload an ImageJ ROI file, otherwise uses default circular ROI"
+        )
+
+        if use_custom_roi:
+            roi_file = st.file_uploader(
+                "Upload ROI (.roi or .zip)",
+                type=['roi', 'zip'],
+                key='roi_file',
+                help="ImageJ ROI file defining region of interest"
+            )
+        else:
+            roi_file = None
+            fov_cm = st.number_input(
+                "Field of View (cm)",
+                min_value=0.1,
+                max_value=10.0,
+                value=1.4,
+                step=0.1,
+                format="%.2f",
+                help="Total field of view in cm (square)"
+            )
+
+            roi_diameter_cm = st.number_input(
+                "ROI Diameter (cm)",
+                min_value=0.1,
+                max_value=10.0,
+                value=1.0,
+                step=0.1,
+                format="%.2f",
+                help="Diameter of circular ROI in cm"
+            )
+
+        st.markdown("**Denoising Parameters**")
+        auto_subspace = st.checkbox(
+            "Auto-estimate Subspace Dimension",
+            value=True,
+            help="Let mbirjax automatically determine the optimal number of dehydration dimensions"
+        )
+
+        if auto_subspace:
+            subspace_dimension = None
+        else:
+            subspace_dimension = st.number_input(
+                "Subspace Dimension",
+                min_value=1,
+                max_value=100,
+                value=10,
+                step=1,
+                help="Number of dehydration dimensions (lower = more denoising)"
+            )
+
+        dataset_type = st.selectbox(
+            "Dataset Type",
+            options=['attenuation', 'transmission'],
+            index=0,
+            help="Type of data: attenuation or transmission"
+        )
+
+        verbose_level = st.slider(
+            "Verbosity",
+            min_value=0,
+            max_value=2,
+            value=1,
+            help="Verbosity level for mbirjax output"
+        )
+
 # Stage 1: Data Loading
 with st.sidebar.expander("📁 1. Data Loading", expanded=False):
     st.markdown("**Original Measurement Parameters**")
@@ -547,9 +645,70 @@ process_button_bottom = st.sidebar.button("🚀 Run Pipeline", type="primary", u
 if process_button or process_button_bottom:
     with st.spinner("Processing pipeline..."):
         try:
-            # Create workflow
-            data = Data(signal_path, openbeam_path,
-                       flux=flux_orig, duration=duration_orig, freq=freq_orig)
+            # Create Data object
+            data = Data(flux=flux_orig, duration=duration_orig, freq=freq_orig)
+
+            # Load data (either CSV or TIFF with denoising)
+            if use_tiff_cleaning:
+                # TIFF mode with denoising
+                if signal_tiff_file is None or openbeam_tiff_file is None:
+                    st.error("Please upload both signal and openbeam TIFF files")
+                    st.stop()
+
+                # Save uploaded files to temporary location
+                import tempfile
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_signal:
+                    tmp_signal.write(signal_tiff_file.read())
+                    tmp_signal_path = tmp_signal.name
+
+                with tempfile.NamedTemporaryFile(delete=False, suffix='.tif') as tmp_openbeam:
+                    tmp_openbeam.write(openbeam_tiff_file.read())
+                    tmp_openbeam_path = tmp_openbeam.name
+
+                # Handle ROI file if provided
+                tmp_roi_path = None
+                if use_custom_roi and roi_file is not None:
+                    roi_suffix = '.roi' if roi_file.name.endswith('.roi') else '.zip'
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=roi_suffix) as tmp_roi:
+                        tmp_roi.write(roi_file.read())
+                        tmp_roi_path = tmp_roi.name
+
+                # Load TIFF stacks with denoising
+                with st.spinner("Loading and denoising signal TIFF..."):
+                    data.load_signal_tiff(
+                        tmp_signal_path,
+                        roi_path=tmp_roi_path,
+                        fov_cm=fov_cm if not use_custom_roi else 1.4,
+                        roi_diameter_cm=roi_diameter_cm if not use_custom_roi else 1.0,
+                        subspace_dimension=subspace_dimension,
+                        dataset_type=dataset_type,
+                        verbose=verbose_level
+                    )
+                    st.sidebar.success("✓ Signal TIFF loaded and denoised")
+
+                with st.spinner("Loading and denoising openbeam TIFF..."):
+                    data.load_openbeam_tiff(
+                        tmp_openbeam_path,
+                        roi_path=tmp_roi_path,
+                        fov_cm=fov_cm if not use_custom_roi else 1.4,
+                        roi_diameter_cm=roi_diameter_cm if not use_custom_roi else 1.0,
+                        subspace_dimension=subspace_dimension,
+                        dataset_type=dataset_type,
+                        verbose=verbose_level
+                    )
+                    st.sidebar.success("✓ Openbeam TIFF loaded and denoised")
+
+                # Clean up temporary files
+                import os
+                os.unlink(tmp_signal_path)
+                os.unlink(tmp_openbeam_path)
+                if tmp_roi_path:
+                    os.unlink(tmp_roi_path)
+
+            else:
+                # CSV mode (original)
+                data.load_signal_data(signal_path)
+                data.load_openbeam_data(openbeam_path)
 
             # Apply stages
             if apply_convolution:
