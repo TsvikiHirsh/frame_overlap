@@ -7,4 +7,4 @@ matplotlib>=3.4.0
 scikit-image>=0.19.0
 tqdm>=4.60.0
 lmfit>=1.0.0
-nbragg>=0.3.0
+nbragg>=0.5.0
