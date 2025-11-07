@@ -96,12 +96,14 @@ class Data:
         self.convolved_data = None  # After convolution
         self.poissoned_data = None  # After Poisson sampling
         self.overlapped_data = None  # After frame overlap
+        self.cd_filtered_data = None  # After Cd filter
 
         # Initialize data storage for openbeam at each stage
         self.op_data = None
         self.op_convolved_data = None
         self.op_poissoned_data = None
         self.op_overlapped_data = None
+        self.op_cd_filtered_data = None  # After Cd filter
 
         self.kernel = None
         self.n_overlapping_frames = None  # Number of overlapping frames
@@ -577,6 +579,85 @@ class Data:
         result['counts'] = poisson_counts.astype(float)
         result['err'] = poisson_err
         return result
+
+    def apply_cd_filter(self, L=9.0, cutoff_energy=0.4):
+        """
+        Apply Cd foil filter to remove neutrons below a cutoff energy.
+
+        This simulates placing a Cd foil in the beam, which absorbs thermal
+        neutrons below the Cd cutoff energy (typically 0.4 eV). Useful for
+        epithermal resonance analysis.
+
+        Parameters
+        ----------
+        L : float, optional
+            Flight path length in meters. Default is 9.0 m.
+        cutoff_energy : float, optional
+            Cutoff energy in eV. Default is 0.4 eV (Cd cutoff).
+
+        Returns
+        -------
+        self
+            Returns self for method chaining
+
+        Notes
+        -----
+        The filter sets counts to zero for all neutrons with energy below
+        the cutoff energy. Energy is calculated from time-of-flight using:
+        E (eV) = 5227.0 * L^2 / t^2, where t is in microseconds.
+
+        Examples
+        --------
+        >>> data = Data('signal.csv', 'openbeam.csv')
+        >>> data.convolute_response(200)
+        >>> data.apply_cd_filter(L=9.0, cutoff_energy=0.4)  # Apply Cd filter
+        >>> data.poisson_sample(duty_cycle=0.8)
+        """
+        if self.data is None and self.op_data is None:
+            raise ValueError("No data loaded. Load data first.")
+
+        # Function to apply Cd filter to a dataframe
+        def apply_filter(df):
+            # Convert time (µs) to energy (eV)
+            # E = 0.5 * m * (L/t)^2
+            # For neutrons: E (eV) = 5227.0 / (t (µs))^2 * L (m)^2
+            time_us = df['time'].values
+
+            # Avoid division by zero
+            time_us = np.where(time_us == 0, np.inf, time_us)
+            energy_eV = 5227.0 * (L ** 2) / (time_us ** 2)
+
+            # Create mask for energies below cutoff
+            below_cutoff = energy_eV < cutoff_energy
+
+            # Set counts to zero for neutrons below cutoff
+            filtered_df = df.copy()
+            filtered_df.loc[below_cutoff, 'counts'] = 0
+            filtered_df.loc[below_cutoff, 'err'] = 1.0  # Small error for zero counts
+
+            return filtered_df
+
+        # Determine which stage to use as source
+        # Priority: poissoned > overlapped > convolved > original
+        signal_source = (self.poissoned_data if self.poissoned_data is not None
+                        else self.overlapped_data if self.overlapped_data is not None
+                        else self.convolved_data if self.convolved_data is not None
+                        else self.data)
+
+        if signal_source is not None:
+            self.cd_filtered_data = apply_filter(signal_source)
+            self.table = self.cd_filtered_data
+
+        op_source = (self.op_poissoned_data if self.op_poissoned_data is not None
+                    else self.op_overlapped_data if self.op_overlapped_data is not None
+                    else self.op_convolved_data if self.op_convolved_data is not None
+                    else self.op_data)
+
+        if op_source is not None:
+            self.op_cd_filtered_data = apply_filter(op_source)
+            self.openbeam_table = self.op_cd_filtered_data
+
+        return self
 
     def plot(self, kind='auto', show_stages=False, show_errors=False, fontsize=16, figsize=(10, 6), **kwargs):
         """
