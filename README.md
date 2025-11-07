@@ -14,8 +14,9 @@ A Python package for analyzing neutron Time-of-Flight (ToF) frame overlap data u
 ✨ **Fluent API** - Chain complete pipeline in one expression
 📊 **Parameter Sweeps** - Automatic optimization with progress tracking
 🔧 **Multi-Frame** - Support 2+ overlapping frames
-📈 **Material Analysis** - Integrated nbragg fitting
+📈 **Material Analysis** - Integrated nbragg (Bragg edges) and nres (resonances) fitting
 🎯 **Smart Scaling** - Automatic flux scaling by pulse duration
+🔬 **Resonance Analysis** - Epithermal absorption resonances with optional Cd filter
 
 ## Installation
 
@@ -41,6 +42,31 @@ result = (wf
     .analyze(xs='iron'))
 
 wf.plot()  # Visualize results
+```
+
+### Resonance Analysis
+
+```python
+from frame_overlap import Workflow
+
+# Analyze epithermal absorption resonances (e.g., Ta)
+wf = Workflow('ta_signal.csv', 'openbeam.csv', flux=5e6, duration=0.5, freq=20)
+
+result = (wf
+    .convolute(pulse_duration=200)
+    .poisson(flux=1e6, freq=60, measurement_time=30)
+    .overlap(kernel=[0, 25])
+    .reconstruct(kind='wiener', noise_power=0.01))
+
+# Apply optional Cd filter (removes neutrons below 0.4 eV)
+wf.data.apply_cd_filter(cutoff_energy=0.4)
+
+# Fit with nres
+from frame_overlap import ResonanceAnalysis
+analysis = ResonanceAnalysis(material='Ta', vary_background=True)
+result = analysis.fit(wf.recon, emin=4e5, emax=1.7e6)  # Energy range in eV
+
+analysis.plot_fit()
 ```
 
 ### Parameter Optimization
@@ -96,7 +122,8 @@ Data → Convolute → Poisson → Overlap → Reconstruct → Analysis
 **`Workflow`** - Complete pipeline with method chaining and parameter sweeps
 **`Data`** - Load and process ToF data
 **`Reconstruct`** - Deconvolution (Wiener, Lucy-Richardson, Tikhonov)
-**`Analysis`** - Material fitting with nbragg
+**`Analysis`** - Bragg edge fitting with nbragg
+**`ResonanceAnalysis`** - Epithermal absorption resonance fitting with nres
 
 See [API Reference](https://tsvikihirsh.github.io/frame_overlap/api/workflow.html) for details.
 
@@ -105,7 +132,11 @@ See [API Reference](https://tsvikihirsh.github.io/frame_overlap/api/workflow.htm
 - Python 3.9+
 - numpy, pandas, matplotlib, scipy, scikit-image, tqdm
 
-Optional: nbragg (for analysis), lmfit (for optimization), jupyter (for notebooks)
+Optional:
+- **nbragg** - for Bragg edge analysis
+- **nres** - for resonance analysis (https://github.com/TsvikiHirsh/nres)
+- **lmfit** - for optimization
+- **jupyter** - for notebooks
 
 ## Citation
 
