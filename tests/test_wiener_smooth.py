@@ -305,7 +305,7 @@ class TestFilterOptions:
         df.to_csv(openbeam_file, index=False)
 
         # Test all filter kinds
-        for kind in ['wiener', 'wiener_smooth', 'lucy', 'tikhonov']:
+        for kind in ['wiener', 'wiener_smooth', 'wiener_adaptive', 'lucy', 'tikhonov']:
             data = Data(str(signal_file), str(openbeam_file))
             data.overlap(kernel=[0, 25])
             recon = Reconstruct(data)
