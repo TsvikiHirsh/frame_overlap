@@ -282,12 +282,16 @@ class Reconstruct:
         kind : str, optional
             Type of filter to apply. Options:
             - 'wiener': Wiener deconvolution (default)
+            - 'wiener_smooth': Wiener with smoothing before deconvolution
+            - 'wiener_adaptive': Scipy adaptive Wiener + deconvolution
             - 'lucy': Richardson-Lucy deconvolution
             - 'tikhonov': Tikhonov regularization
         noise_power : float, optional
             Noise power parameter for regularization. Default is 0.01.
         **kwargs
-            Additional keyword arguments for specific filters
+            Additional keyword arguments for specific filters:
+            - smooth_window : int, window size for smoothing (wiener_smooth)
+            - mysize : int, window for adaptive filter (wiener_adaptive)
 
         Returns
         -------
@@ -324,14 +328,18 @@ class Reconstruct:
 
         # Reconstruct signal
         if kind == 'wiener':
-            reconstructed_signal = self._wiener_filter(noise_power, **kwargs)
+            reconstructed_signal = self._wiener_filter(noise_power, smooth=False, **kwargs)
+        elif kind == 'wiener_smooth':
+            reconstructed_signal = self._wiener_filter(noise_power, smooth=True, **kwargs)
+        elif kind == 'wiener_adaptive':
+            reconstructed_signal = self._wiener_adaptive_filter(**kwargs)
         elif kind == 'lucy' or kind == 'richardson-lucy':
             reconstructed_signal = self._lucy_richardson_filter(**kwargs)
         elif kind == 'tikhonov':
             reconstructed_signal = self._tikhonov_filter(noise_power, **kwargs)
         else:
             raise ValueError(f"Unknown filter kind '{kind}'. "
-                           f"Choose from: 'wiener', 'lucy', 'tikhonov'")
+                           f"Choose from: 'wiener', 'wiener_smooth', 'wiener_adaptive', 'lucy', 'tikhonov'")
 
         # Create reconstructed signal DataFrame
         self.reconstructed_data = pd.DataFrame({
@@ -347,7 +355,11 @@ class Reconstruct:
             self.data.table = self.data.op_overlapped_data
 
             if kind == 'wiener':
-                reconstructed_ob = self._wiener_filter(noise_power, **kwargs)
+                reconstructed_ob = self._wiener_filter(noise_power, smooth=False, **kwargs)
+            elif kind == 'wiener_smooth':
+                reconstructed_ob = self._wiener_filter(noise_power, smooth=True, **kwargs)
+            elif kind == 'wiener_adaptive':
+                reconstructed_ob = self._wiener_adaptive_filter(**kwargs)
             elif kind == 'lucy' or kind == 'richardson-lucy':
                 reconstructed_ob = self._lucy_richardson_filter(**kwargs)
             elif kind == 'tikhonov':
@@ -368,7 +380,7 @@ class Reconstruct:
 
         return self
 
-    def _wiener_filter(self, noise_power, **kwargs):
+    def _wiener_filter(self, noise_power, smooth=False, smooth_window=5, **kwargs):
         """
         Apply Wiener deconvolution filter.
 
@@ -376,6 +388,11 @@ class Reconstruct:
         ----------
         noise_power : float
             Noise power for Wiener filter regularization
+        smooth : bool, optional
+            If True, apply smoothing to observed data before deconvolution.
+            This follows the approach from the paper. Default is False.
+        smooth_window : int, optional
+            Window size for moving average smoothing. Default is 5.
 
         Returns
         -------
@@ -386,6 +403,11 @@ class Reconstruct:
             raise ValueError("noise_power must be positive")
 
         observed = self.data.table['counts'].values
+
+        # Apply smoothing if requested (following the paper's approach)
+        if smooth:
+            from scipy.ndimage import uniform_filter1d
+            observed = uniform_filter1d(observed, size=smooth_window, mode='nearest')
 
         # Reconstruct the kernel from the stored sequence
         kernel = self._reconstruct_kernel()
@@ -404,6 +426,58 @@ class Reconstruct:
         # Apply Wiener deconvolution in frequency domain
         H = np.fft.fft(kernel_padded)
         Y = np.fft.fft(observed)
+        H_conj = np.conj(H)
+        G = H_conj / (np.abs(H)**2 + noise_power)
+        X_est = Y * G
+        x_est = np.real(np.fft.ifft(X_est))
+
+        return x_est
+
+    def _wiener_adaptive_filter(self, mysize=5, noise_power=0.01, **kwargs):
+        """
+        Apply adaptive Wiener filter using scipy.signal.wiener for noise reduction,
+        then apply standard Wiener deconvolution.
+
+        This combines scipy's adaptive noise estimation with deconvolution.
+
+        Parameters
+        ----------
+        mysize : int or tuple, optional
+            Window size for local statistics estimation. Default is 5.
+        noise_power : float, optional
+            Noise power for deconvolution step. Default is 0.01.
+
+        Returns
+        -------
+        np.ndarray
+            Reconstructed signal
+        """
+        from scipy import signal as scipy_signal
+
+        observed = self.data.table['counts'].values
+
+        # Apply scipy's adaptive Wiener filter for noise reduction
+        # Reshape to 2D for scipy.signal.wiener (expects at least 2D)
+        observed_2d = observed.reshape(1, -1)
+        filtered_2d = scipy_signal.wiener(observed_2d, mysize=(1, mysize), noise=None)
+        filtered = filtered_2d.flatten()
+
+        # Now apply deconvolution on the filtered signal
+        kernel = self._reconstruct_kernel()
+
+        # Handle kernel length
+        if len(kernel) > len(filtered):
+            kernel = kernel[:len(filtered)]
+
+        # Pad kernel to match signal length
+        if len(kernel) < len(filtered):
+            kernel_padded = np.pad(kernel, (0, len(filtered) - len(kernel)), 'constant')
+        else:
+            kernel_padded = kernel
+
+        # Apply Wiener deconvolution in frequency domain
+        H = np.fft.fft(kernel_padded)
+        Y = np.fft.fft(filtered)
         H_conj = np.conj(H)
         G = H_conj / (np.abs(H)**2 + noise_power)
         X_est = Y * G

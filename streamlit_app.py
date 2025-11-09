@@ -673,11 +673,16 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
     if apply_reconstruction:
         recon_method = st.selectbox(
             "Method",
-            ["wiener", "lucy", "tikhonov"],
-            help="Deconvolution algorithm"
+            ["wiener", "wiener_smooth", "wiener_adaptive", "lucy", "tikhonov"],
+            help="Deconvolution algorithm:\n"
+                 "- wiener: Standard Wiener deconvolution\n"
+                 "- wiener_smooth: Wiener with pre-smoothing (paper method)\n"
+                 "- wiener_adaptive: Scipy adaptive Wiener + deconvolution\n"
+                 "- lucy: Richardson-Lucy iterative\n"
+                 "- tikhonov: Tikhonov regularization"
         )
 
-        if recon_method in ["wiener", "tikhonov"]:
+        if recon_method in ["wiener", "wiener_smooth", "wiener_adaptive", "tikhonov"]:
             noise_power = st.slider(
                 "Noise Power",
                 min_value=0.001,
@@ -688,6 +693,31 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
                 help="Regularization parameter"
             )
             recon_params = {"noise_power": noise_power}
+
+            # Add smoothing window option for wiener_smooth
+            if recon_method == "wiener_smooth":
+                smooth_window = st.slider(
+                    "Smooth Window",
+                    min_value=3,
+                    max_value=21,
+                    value=5,
+                    step=2,
+                    help="Window size for moving average smoothing (paper uses 5)"
+                )
+                recon_params["smooth_window"] = smooth_window
+
+            # Add mysize option for wiener_adaptive
+            elif recon_method == "wiener_adaptive":
+                mysize = st.slider(
+                    "Adaptive Window",
+                    min_value=3,
+                    max_value=21,
+                    value=5,
+                    step=2,
+                    help="Window size for adaptive noise estimation"
+                )
+                recon_params["mysize"] = mysize
+
         else:  # lucy
             iterations = st.slider(
                 "Iterations",
@@ -1536,6 +1566,8 @@ else:
     ## Reconstruction Methods
 
     - **Wiener Filter**: Fast, works well with known noise
+    - **Wiener Smooth**: Wiener with pre-smoothing (follows paper approach, good for noisy data)
+    - **Wiener Adaptive**: Scipy adaptive noise estimation + Wiener deconvolution
     - **Lucy-Richardson**: Iterative, good for positive-valued data
     - **Tikhonov**: Regularization-based, smooth results
 
