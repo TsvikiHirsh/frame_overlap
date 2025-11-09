@@ -37,6 +37,17 @@ except Exception as e:
         'traceback': traceback.format_exc()
     }
 
+# Try to import ResonanceAnalysis (for nres)
+RESONANCE_ANALYSIS_AVAILABLE = False
+RESONANCE_ERROR = None
+
+try:
+    from frame_overlap import ResonanceAnalysis
+    RESONANCE_ANALYSIS_AVAILABLE = True
+except Exception as e:
+    RESONANCE_ANALYSIS_AVAILABLE = False
+    RESONANCE_ERROR = str(e)
+
     # Try to diagnose the issue
     try:
         # Check if nbragg package exists
@@ -711,37 +722,160 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
         recon_params = {}
         tmin, tmax = None, None
 
-# Stage 6: Analysis (nbragg)
-with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
-    if not ANALYSIS_AVAILABLE:
-        st.error("⚠️ nbragg not available")
-        st.caption("See diagnostic info in main page")
-        apply_analysis = False
-    else:
-        apply_analysis = st.checkbox("Apply nbragg Analysis", value=False,
-                                     help="Fit reconstructed data with nbragg material models")
+# Stage 6: Analysis (nbragg / nres)
+with st.sidebar.expander("🔬 6. Analysis", expanded=False):
+    # Check availability
+    any_analysis_available = ANALYSIS_AVAILABLE or RESONANCE_ANALYSIS_AVAILABLE
 
-    if apply_analysis and ANALYSIS_AVAILABLE:
-        st.markdown("**nbragg Model Selection**")
-        nbragg_model = st.selectbox(
-            "Material Model",
-            ["iron", "iron_with_cellulose", "iron_square_response"],
-            index=0,  # Default to "iron"
-            help="Select nbragg cross-section model:\n"
-                 "- iron: Fe_sg229_Iron-alpha (recommended)\n"
-                 "- iron_with_cellulose: Fe_sg225_Iron-gamma + cellulose\n"
-                 "- iron_square_response: Fe_sg225_Iron-gamma with square response"
+    if not any_analysis_available:
+        st.error("⚠️ No analysis packages available")
+        if not ANALYSIS_AVAILABLE:
+            st.caption("nbragg: not available")
+        if not RESONANCE_ANALYSIS_AVAILABLE:
+            st.caption("nres: not available")
+        apply_analysis = False
+        analysis_type = "bragg"
+    else:
+        apply_analysis = st.checkbox("Apply Analysis", value=False,
+                                     help="Fit reconstructed data with material models")
+
+    if apply_analysis and any_analysis_available:
+        # Choose analysis type
+        analysis_options = []
+        if ANALYSIS_AVAILABLE:
+            analysis_options.append("Bragg Edges (nbragg)")
+        if RESONANCE_ANALYSIS_AVAILABLE:
+            analysis_options.append("Resonances (nres)")
+
+        analysis_type_display = st.radio(
+            "Analysis Type",
+            options=analysis_options,
+            help="Choose between Bragg edge analysis or resonance analysis"
         )
 
-        st.markdown("**Fitting Options**")
-        vary_background = st.checkbox("Vary Background", value=True,
-                                     help="Allow background to vary during fitting")
-        vary_response = st.checkbox("Vary Response", value=True,
-                                   help="Allow response function to vary during fitting")
+        # Map display name to internal type
+        if "Bragg" in analysis_type_display:
+            analysis_type = "bragg"
+        else:
+            analysis_type = "resonance"
+
+        st.markdown("---")
+
+        if analysis_type == "bragg":
+            # Bragg edge analysis (nbragg)
+            st.markdown("**nbragg Model Selection**")
+            nbragg_model = st.selectbox(
+                "Material Model",
+                ["iron", "iron_with_cellulose", "iron_square_response"],
+                index=0,  # Default to "iron"
+                help="Select nbragg cross-section model:\n"
+                     "- iron: Fe_sg229_Iron-alpha (recommended)\n"
+                     "- iron_with_cellulose: Fe_sg225_Iron-gamma + cellulose\n"
+                     "- iron_square_response: Fe_sg225_Iron-gamma with square response"
+            )
+
+            st.markdown("**Fitting Options**")
+            vary_background = st.checkbox("Vary Background", value=True,
+                                         help="Allow background to vary during fitting")
+            vary_response = st.checkbox("Vary Response", value=True,
+                                       help="Allow response function to vary during fitting")
+
+            # Set defaults for resonance parameters (not used but needed for code)
+            nres_material = "Ta"
+            apply_cd_filter = False
+            cd_cutoff = 0.4
+            emin = None
+            emax = None
+            vary_weights = False
+            vary_tof = False
+
+        else:  # resonance
+            # Resonance analysis (nres)
+            st.markdown("**nres Material Selection**")
+            nres_material = st.text_input(
+                "Material",
+                value="Ta",
+                help="Material name for nres cross-section (e.g., Ta, U, W)"
+            )
+
+            st.markdown("**Cd Filter (Optional)**")
+            apply_cd_filter = st.checkbox(
+                "Apply Cd Filter",
+                value=False,
+                help="Remove neutrons below Cd cutoff energy (0.4 eV)"
+            )
+
+            if apply_cd_filter:
+                cd_cutoff = st.number_input(
+                    "Cd Cutoff Energy (eV)",
+                    min_value=0.1,
+                    max_value=1.0,
+                    value=0.4,
+                    step=0.05,
+                    format="%.2f",
+                    help="Energy cutoff for Cd filter (default: 0.4 eV)"
+                )
+            else:
+                cd_cutoff = 0.4
+
+            st.markdown("**Energy Range**")
+            use_energy_range = st.checkbox(
+                "Specify Energy Range",
+                value=True,
+                help="Limit fit to specific energy range"
+            )
+
+            if use_energy_range:
+                col1, col2 = st.columns(2)
+                with col1:
+                    emin = st.number_input(
+                        "Min Energy (eV)",
+                        min_value=0.1,
+                        max_value=1e7,
+                        value=4e5,
+                        step=1e4,
+                        format="%.2e",
+                        help="Minimum energy for fitting"
+                    )
+                with col2:
+                    emax = st.number_input(
+                        "Max Energy (eV)",
+                        min_value=0.1,
+                        max_value=1e8,
+                        value=1.7e6,
+                        step=1e5,
+                        format="%.2e",
+                        help="Maximum energy for fitting"
+                    )
+            else:
+                emin = None
+                emax = None
+
+            st.markdown("**Fitting Options**")
+            vary_weights = st.checkbox("Vary Weights", value=False,
+                                      help="Allow resonance weights to vary")
+            vary_background = st.checkbox("Vary Background", value=True,
+                                         help="Allow background to vary during fitting")
+            vary_response = st.checkbox("Vary Response", value=False,
+                                       help="Allow response function to vary")
+            vary_tof = st.checkbox("Vary TOF", value=False,
+                                  help="Allow TOF calibration to vary")
+
+            # Set defaults for nbragg parameters (not used but needed for code)
+            nbragg_model = "iron"
     else:
+        # Defaults when analysis is not applied
+        analysis_type = "bragg"
         nbragg_model = "iron"
         vary_background = True
         vary_response = True
+        nres_material = "Ta"
+        apply_cd_filter = False
+        cd_cutoff = 0.4
+        emin = None
+        emax = None
+        vary_weights = False
+        vary_tof = False
 
 # Process button at the bottom (duplicate for convenience)
 st.sidebar.markdown("---")
@@ -780,44 +914,82 @@ if process_button or process_button_bottom:
                 stats = recon.get_statistics()
                 st.sidebar.success(f"✓ Reconstructed (χ²/dof: {stats['chi2_per_dof']:.1f})")
 
-            # Analysis (nbragg fitting)
-            if apply_analysis and apply_reconstruction and apply_overlap and ANALYSIS_AVAILABLE:
+            # Apply Cd filter if requested (for resonance analysis)
+            if apply_analysis and analysis_type == "resonance" and apply_cd_filter:
+                data.apply_cd_filter(L=9.0, cutoff_energy=cd_cutoff)
+                st.sidebar.success(f"✓ Cd filter (cutoff: {cd_cutoff} eV)")
+
+            # Analysis (nbragg or nres fitting)
+            if apply_analysis and apply_reconstruction and apply_overlap:
                 try:
-                    analysis = Analysis(xs=nbragg_model, vary_background=vary_background,
-                                       vary_response=vary_response)
+                    if analysis_type == "bragg" and ANALYSIS_AVAILABLE:
+                        # Bragg edge analysis with nbragg
+                        analysis = Analysis(xs=nbragg_model, vary_background=vary_background,
+                                           vary_response=vary_response)
 
-                    # Prepare nbragg data and clean NaN/Inf values (critical for fitting!)
-                    nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
+                        # Prepare nbragg data and clean NaN/Inf values (critical for fitting!)
+                        nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
 
-                    # Remove NaN values
-                    nbragg_data.table = nbragg_data.table.dropna()
+                        # Remove NaN values
+                        nbragg_data.table = nbragg_data.table.dropna()
 
-                    # Remove inf values (can occur from division by zero in transmission calculation)
-                    nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['trans'])]
-                    nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['err'])]
+                        # Remove inf values (can occur from division by zero in transmission calculation)
+                        nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['trans'])]
+                        nbragg_data.table = nbragg_data.table[~np.isinf(nbragg_data.table['err'])]
 
-                    # Remove zero or negative errors
-                    nbragg_data.table = nbragg_data.table[nbragg_data.table['err'] > 0]
+                        # Remove zero or negative errors
+                        nbragg_data.table = nbragg_data.table[nbragg_data.table['err'] > 0]
 
-                    # Fit using the cleaned data directly with the model
-                    result = analysis.model.fit(nbragg_data)
-                    analysis.result = result
-                    analysis.data = nbragg_data
+                        # Fit using the cleaned data directly with the model
+                        result = analysis.model.fit(nbragg_data)
+                        analysis.result = result
+                        analysis.data = nbragg_data
 
-                    # Check if result is valid (has redchi attribute and it's not NaN)
-                    if hasattr(result, 'redchi') and not pd.isna(result.redchi):
-                        st.session_state.analysis = analysis
-                        st.sidebar.success(f"✓ nbragg fit (χ²/dof: {result.redchi:.2f})")
+                        # Check if result is valid (has redchi attribute and it's not NaN)
+                        if hasattr(result, 'redchi') and not pd.isna(result.redchi):
+                            st.session_state.analysis = analysis
+                            st.session_state.analysis_type = "bragg"
+                            st.sidebar.success(f"✓ nbragg fit (χ²/dof: {result.redchi:.2f})")
+                        else:
+                            st.sidebar.warning(f"⚠️ nbragg fit produced invalid results")
+                            st.session_state.analysis = None
+                            st.session_state.analysis_type = None
+
+                    elif analysis_type == "resonance" and RESONANCE_ANALYSIS_AVAILABLE:
+                        # Resonance analysis with nres
+                        analysis = ResonanceAnalysis(
+                            material=nres_material,
+                            vary_weights=vary_weights if vary_weights else None,
+                            vary_background=vary_background if vary_background else None,
+                            vary_response=vary_response if vary_response else None,
+                            vary_tof=vary_tof if vary_tof else None
+                        )
+
+                        # Fit with energy range
+                        result = analysis.fit(recon, emin=emin, emax=emax)
+
+                        # Check if result is valid
+                        if hasattr(result, 'redchi') and not pd.isna(result.redchi):
+                            st.session_state.analysis = analysis
+                            st.session_state.analysis_type = "resonance"
+                            st.sidebar.success(f"✓ nres fit (χ²/dof: {result.redchi:.2f})")
+                        else:
+                            st.sidebar.warning(f"⚠️ nres fit produced invalid results")
+                            st.session_state.analysis = None
+                            st.session_state.analysis_type = None
+
                     else:
-                        st.sidebar.warning(f"⚠️ nbragg fit produced invalid results")
                         st.session_state.analysis = None
+                        st.session_state.analysis_type = None
 
                 except Exception as e:
-                    st.sidebar.error(f"⚠️ nbragg fit failed: {str(e)}")
+                    analysis_name = "nbragg" if analysis_type == "bragg" else "nres"
+                    st.sidebar.error(f"⚠️ {analysis_name} fit failed: {str(e)}")
                     st.session_state.analysis = None
+                    st.session_state.analysis_type = None
 
                     # Show detailed error information
-                    with st.expander("🔍 nbragg Error Details", expanded=True):
+                    with st.expander(f"🔍 {analysis_name} Error Details", expanded=True):
                         st.error(f"**Error Type:** {type(e).__name__}")
                         st.error(f"**Error Message:** {str(e)}")
 
@@ -825,40 +997,66 @@ if process_button or process_button_bottom:
                         st.code(traceback.format_exc(), language="text")
 
                         # Try to diagnose the specific issue
-                        st.markdown("### Diagnostic Checks")
-                        try:
-                            import sys
-                            import importlib.util
-
-                            # Check if nbragg can be found
-                            nbragg_spec = importlib.util.find_spec("nbragg")
-                            if nbragg_spec:
-                                st.success(f"✓ nbragg package found at: {nbragg_spec.origin}")
-                            else:
-                                st.error("✗ nbragg package not found in sys.path")
-                                st.write("sys.path:", sys.path)
-
-                            # Try importing nbragg directly
+                        if analysis_type == "bragg":
+                            st.markdown("### Diagnostic Checks")
                             try:
-                                import nbragg as test_nbragg
-                                st.success(f"✓ nbragg imports successfully (version: {getattr(test_nbragg, '__version__', 'unknown')})")
+                                import sys
+                                import importlib.util
 
-                                # Check materials
+                                # Check if nbragg can be found
+                                nbragg_spec = importlib.util.find_spec("nbragg")
+                                if nbragg_spec:
+                                    st.success(f"✓ nbragg package found at: {nbragg_spec.origin}")
+                                else:
+                                    st.error("✗ nbragg package not found in sys.path")
+                                    st.write("sys.path:", sys.path)
+
+                                # Try importing nbragg directly
                                 try:
-                                    materials = test_nbragg.materials
-                                    st.success(f"✓ nbragg.materials accessible")
-                                    st.write(f"Available materials: {len(materials)} items")
-                                except Exception as mat_err:
-                                    st.error(f"✗ nbragg.materials failed: {mat_err}")
+                                    import nbragg as test_nbragg
+                                    st.success(f"✓ nbragg imports successfully (version: {getattr(test_nbragg, '__version__', 'unknown')})")
 
-                            except ImportError as imp_err:
-                                st.error(f"✗ nbragg import failed: {imp_err}")
-                                st.code(traceback.format_exc(), language="text")
+                                    # Check materials
+                                    try:
+                                        materials = test_nbragg.materials
+                                        st.success(f"✓ nbragg.materials accessible")
+                                        st.write(f"Available materials: {len(materials)} items")
+                                    except Exception as mat_err:
+                                        st.error(f"✗ nbragg.materials failed: {mat_err}")
 
-                        except Exception as diag_err:
-                            st.error(f"Diagnostic check failed: {diag_err}")
+                                except ImportError as imp_err:
+                                    st.error(f"✗ nbragg import failed: {imp_err}")
+                                    st.code(traceback.format_exc(), language="text")
+
+                            except Exception as diag_err:
+                                st.error(f"Diagnostic check failed: {diag_err}")
+                        else:
+                            st.markdown("### Diagnostic Checks")
+                            try:
+                                import sys
+                                import importlib.util
+
+                                # Check if nres can be found
+                                nres_spec = importlib.util.find_spec("nres")
+                                if nres_spec:
+                                    st.success(f"✓ nres package found at: {nres_spec.origin}")
+                                else:
+                                    st.error("✗ nres package not found in sys.path")
+                                    st.write("sys.path:", sys.path)
+
+                                # Try importing nres directly
+                                try:
+                                    import nres as test_nres
+                                    st.success(f"✓ nres imports successfully (version: {getattr(test_nres, '__version__', 'unknown')})")
+                                except ImportError as imp_err:
+                                    st.error(f"✗ nres import failed: {imp_err}")
+                                    st.code(traceback.format_exc(), language="text")
+
+                            except Exception as diag_err:
+                                st.error(f"Diagnostic check failed: {diag_err}")
             else:
                 st.session_state.analysis = None
+                st.session_state.analysis_type = None
 
             st.sidebar.success("✅ Pipeline complete!")
 
@@ -1000,7 +1198,7 @@ if st.session_state.workflow_data is not None:
                     st.code(traceback.format_exc())
             elif plot_type == 'transmission':
                 if st.session_state.analysis is None:
-                    st.info("💡 Enable 'Apply nbragg Analysis' in sidebar (Stage 6) to see the nbragg fit curve")
+                    st.info("💡 Enable 'Apply Analysis' in sidebar (Stage 6) to see the fit curve")
 
             # Convert to Plotly for interactivity
             plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_recon)
@@ -1017,11 +1215,13 @@ if st.session_state.workflow_data is not None:
     with tab3:
         st.header("Statistics & Metrics")
 
-        # Debug indicator for nbragg analysis
+        # Debug indicator for analysis
         if st.session_state.analysis is not None:
-            st.success("✅ nbragg analysis results available")
+            analysis_type_display = st.session_state.get('analysis_type', 'bragg')
+            analysis_name = "nbragg" if analysis_type_display == "bragg" else "nres"
+            st.success(f"✅ {analysis_name} analysis results available")
         else:
-            st.info("💡 Enable 'Apply nbragg Analysis' in sidebar (Stage 6) to see fit results below")
+            st.info("💡 Enable 'Apply Analysis' in sidebar (Stage 6) to see fit results below")
 
         col1, col2 = st.columns(2)
 
@@ -1070,10 +1270,12 @@ if st.session_state.workflow_data is not None:
             else:
                 st.info("No reconstruction statistics available yet.")
 
-        # Show nbragg fit results if available
+        # Show fit results if available (nbragg or nres)
         if st.session_state.analysis is not None:
             st.markdown("---")
-            st.subheader("nbragg Fit Results")
+            analysis_type_display = st.session_state.get('analysis_type', 'bragg')
+            analysis_name = "nbragg" if analysis_type_display == "bragg" else "nres"
+            st.subheader(f"{analysis_name} Fit Results")
 
             try:
                 result = st.session_state.analysis.result
@@ -1081,16 +1283,16 @@ if st.session_state.workflow_data is not None:
                 # Show reduced chi-squared
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.metric("Reduced χ² (nbragg)", f"{result.redchi:.4f}")
+                    st.metric(f"Reduced χ² ({analysis_name})", f"{result.redchi:.4f}")
 
                 with col2:
-                    # Quality indicator for nbragg fit
+                    # Quality indicator for fit
                     if result.redchi < 2:
-                        st.success(f"✅ Excellent nbragg fit")
+                        st.success(f"✅ Excellent {analysis_name} fit")
                     elif result.redchi < 5:
-                        st.info(f"ℹ️ Good nbragg fit")
+                        st.info(f"ℹ️ Good {analysis_name} fit")
                     else:
-                        st.warning(f"⚠️ Poor nbragg fit")
+                        st.warning(f"⚠️ Poor {analysis_name} fit")
 
                 # Show fit parameters table
                 st.markdown("**Fitted Parameters**")
@@ -1120,7 +1322,7 @@ if st.session_state.workflow_data is not None:
                     st.text(fit_report)
 
             except Exception as e:
-                st.error(f"Error displaying nbragg fit results: {e}")
+                st.error(f"Error displaying {analysis_name} fit results: {e}")
 
     with tab4:
         st.header("GroupBy - Parameter Sweep")
@@ -1219,10 +1421,13 @@ if st.session_state.workflow_data is not None:
                     'r_squared': 'R² (Coefficient of Determination)',
                 }
 
-                # Add nbragg parameters if analysis is enabled
-                if apply_analysis and ANALYSIS_AVAILABLE:
-                    y_param_options['nbragg_redchi'] = 'nbragg Reduced χ²'
-                    y_param_options['nbragg_thickness'] = 'nbragg Thickness (cm)'
+                # Add analysis parameters if enabled
+                if apply_analysis:
+                    if analysis_type == "bragg" and ANALYSIS_AVAILABLE:
+                        y_param_options['nbragg_redchi'] = 'nbragg Reduced χ²'
+                        y_param_options['nbragg_thickness'] = 'nbragg Thickness (cm)'
+                    elif analysis_type == "resonance" and RESONANCE_ANALYSIS_AVAILABLE:
+                        y_param_options['nres_redchi'] = 'nres Reduced χ²'
 
                 y_param = st.selectbox(
                     "Y-axis Parameter",
@@ -1328,30 +1533,62 @@ if st.session_state.workflow_data is not None:
                                         'n_points': stats.get('n_points', 0)
                                     }
 
-                                    # Run nbragg analysis if enabled
-                                    if apply_analysis and ANALYSIS_AVAILABLE:
-                                        try:
-                                            analysis_sweep = Analysis(xs=nbragg_model,
-                                                                     vary_background=vary_background,
-                                                                     vary_response=vary_response)
-                                            nbragg_result = analysis_sweep.fit(recon_sweep)
+                                    # Run analysis if enabled
+                                    if apply_analysis:
+                                        if analysis_type == "bragg" and ANALYSIS_AVAILABLE:
+                                            try:
+                                                analysis_sweep = Analysis(xs=nbragg_model,
+                                                                         vary_background=vary_background,
+                                                                         vary_response=vary_response)
+                                                nbragg_result = analysis_sweep.fit(recon_sweep)
 
-                                            # Extract nbragg parameters
-                                            result_dict['nbragg_redchi'] = nbragg_result.redchi
+                                                # Extract nbragg parameters
+                                                result_dict['nbragg_redchi'] = nbragg_result.redchi
 
-                                            # Try to get thickness parameter (it might be named differently)
-                                            thickness_param = None
-                                            for param_name in nbragg_result.params.keys():
-                                                if 'thickness' in param_name.lower() or 'L' in param_name or 'length' in param_name.lower():
-                                                    thickness_param = nbragg_result.params[param_name].value
-                                                    break
-                                            result_dict['nbragg_thickness'] = thickness_param if thickness_param is not None else np.nan
-                                        except Exception as e_nbragg:
+                                                # Try to get thickness parameter (it might be named differently)
+                                                thickness_param = None
+                                                for param_name in nbragg_result.params.keys():
+                                                    if 'thickness' in param_name.lower() or 'L' in param_name or 'length' in param_name.lower():
+                                                        thickness_param = nbragg_result.params[param_name].value
+                                                        break
+                                                result_dict['nbragg_thickness'] = thickness_param if thickness_param is not None else np.nan
+                                                result_dict['nres_redchi'] = np.nan
+                                            except Exception as e_nbragg:
+                                                result_dict['nbragg_redchi'] = np.nan
+                                                result_dict['nbragg_thickness'] = np.nan
+                                                result_dict['nres_redchi'] = np.nan
+
+                                        elif analysis_type == "resonance" and RESONANCE_ANALYSIS_AVAILABLE:
+                                            try:
+                                                # Apply Cd filter if requested
+                                                if apply_cd_filter:
+                                                    data_sweep.apply_cd_filter(L=9.0, cutoff_energy=cd_cutoff)
+
+                                                analysis_sweep = ResonanceAnalysis(
+                                                    material=nres_material,
+                                                    vary_weights=vary_weights if vary_weights else None,
+                                                    vary_background=vary_background if vary_background else None,
+                                                    vary_response=vary_response if vary_response else None,
+                                                    vary_tof=vary_tof if vary_tof else None
+                                                )
+                                                nres_result = analysis_sweep.fit(recon_sweep, emin=emin, emax=emax)
+
+                                                # Extract nres parameters
+                                                result_dict['nres_redchi'] = nres_result.redchi
+                                                result_dict['nbragg_redchi'] = np.nan
+                                                result_dict['nbragg_thickness'] = np.nan
+                                            except Exception as e_nres:
+                                                result_dict['nres_redchi'] = np.nan
+                                                result_dict['nbragg_redchi'] = np.nan
+                                                result_dict['nbragg_thickness'] = np.nan
+                                        else:
                                             result_dict['nbragg_redchi'] = np.nan
                                             result_dict['nbragg_thickness'] = np.nan
+                                            result_dict['nres_redchi'] = np.nan
                                     else:
                                         result_dict['nbragg_redchi'] = np.nan
                                         result_dict['nbragg_thickness'] = np.nan
+                                        result_dict['nres_redchi'] = np.nan
 
                                     results.append(result_dict)
 
@@ -1398,8 +1635,8 @@ if st.session_state.workflow_data is not None:
                             # Drop NaN values before finding best
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                # Minimize chi2, rmse, nrmse, nbragg_redchi; Maximize r_squared
-                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
+                                # Minimize chi2, rmse, nrmse, nbragg_redchi, nres_redchi; Maximize r_squared
+                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi', 'nres_redchi']
                                 best_idx = valid_df[y_param].idxmin() if y_param in minimize_params else valid_df[y_param].idxmax()
                                 best_value = results_df.loc[best_idx, param_to_sweep]
                                 st.metric("Best Value", f"{best_value:.4g}")
@@ -1410,8 +1647,8 @@ if st.session_state.workflow_data is not None:
                         if y_param in results_df.columns:
                             valid_df = results_df.dropna(subset=[y_param])
                             if len(valid_df) > 0:
-                                # Minimize chi2, rmse, nrmse, nbragg_redchi; Maximize r_squared
-                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
+                                # Minimize chi2, rmse, nrmse, nbragg_redchi, nres_redchi; Maximize r_squared
+                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi', 'nres_redchi']
                                 best_metric = valid_df[y_param].min() if y_param in minimize_params else valid_df[y_param].max()
                                 st.metric(f"Best {y_param_options[y_param]}", f"{best_metric:.4g}")
                             else:
@@ -1530,7 +1767,9 @@ else:
     - 🎲 **Poisson Sampling**: Apply counting statistics with new flux conditions
     - 🔄 **Frame Overlap**: Create overlapping frames (2-4 frames supported)
     - 🔧 **Reconstruction**: Recover original signal using deconvolution
-    - 🔬 **Analysis (nbragg)**: Fit reconstructed data with material cross-section models
+    - 🔬 **Analysis**: Fit reconstructed data with material cross-section models
+      - **Bragg Edges (nbragg)**: For Bragg edge transmission analysis
+      - **Resonances (nres)**: For epithermal absorption resonance analysis
     - 🔁 **GroupBy**: Parameter sweep for optimization and sensitivity analysis
 
     ## Reconstruction Methods
@@ -1539,11 +1778,17 @@ else:
     - **Lucy-Richardson**: Iterative, good for positive-valued data
     - **Tikhonov**: Regularization-based, smooth results
 
-    ## nbragg Models
+    ## Analysis Options
 
+    ### Bragg Edges (nbragg)
     - **iron**: Fe_sg229_Iron-alpha (recommended, default)
     - **iron_with_cellulose**: Fe_sg225_Iron-gamma + cellulose background
     - **iron_square_response**: Fe_sg225_Iron-gamma with square response function
+
+    ### Resonances (nres)
+    - Fit epithermal absorption resonances in materials like Ta, U, W
+    - Optional Cd foil filter to remove thermal neutrons (< 0.4 eV)
+    - Energy range selection for targeted fitting
 
     ## Features
 
