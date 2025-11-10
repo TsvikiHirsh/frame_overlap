@@ -447,6 +447,37 @@ with st.sidebar.expander("📁 1. Data Loading", expanded=False):
         help="Original pulse frequency in Hz"
     )
 
+    st.markdown("**Wavelength Range**")
+    col1, col2 = st.columns(2)
+    with col1:
+        lambda_min = st.number_input(
+            "Min λ (Å)",
+            min_value=0.1,
+            max_value=20.0,
+            value=1.0,
+            step=0.1,
+            format="%.1f",
+            help="Minimum wavelength in Angstroms"
+        )
+    with col2:
+        lambda_max = st.number_input(
+            "Max λ (Å)",
+            min_value=0.1,
+            max_value=20.0,
+            value=10.0,
+            step=0.1,
+            format="%.1f",
+            help="Maximum wavelength in Angstroms"
+        )
+
+    # Convert wavelength to time range (using L=9m flight path)
+    flight_path_m = 9.0
+    tof_min_us = wavelength_to_tof(lambda_min, flight_path_m)
+    tof_max_us = wavelength_to_tof(lambda_max, flight_path_m)
+
+    # Show the converted time range
+    st.caption(f"Time range: {tof_min_us/1000:.2f} - {tof_max_us/1000:.2f} ms")
+
 # Stage 2: Convolution
 with st.sidebar.expander("🔊 2. Instrument Response", expanded=False):
     apply_convolution = st.checkbox("Apply Convolution", value=True)
@@ -784,6 +815,20 @@ if process_button or process_button_bottom:
             # Create workflow
             data = Data(signal_path, openbeam_path,
                        flux=flux_orig, duration=duration_orig, freq=freq_orig)
+
+            # Apply wavelength filtering (by filtering time range)
+            if data.data is not None and data.op_data is not None:
+                # Filter signal data
+                mask_signal = (data.data['time'] >= tof_min_us) & (data.data['time'] <= tof_max_us)
+                data.data = data.data[mask_signal].copy()
+                data.table = data.data  # Update legacy reference
+
+                # Filter openbeam data
+                mask_openbeam = (data.op_data['time'] >= tof_min_us) & (data.op_data['time'] <= tof_max_us)
+                data.op_data = data.op_data[mask_openbeam].copy()
+                data.openbeam_table = data.op_data  # Update legacy reference
+
+                st.sidebar.success(f"✓ Wavelength filtered: {lambda_min:.1f}-{lambda_max:.1f} Å")
 
             # Apply stages
             if apply_convolution:
@@ -1295,6 +1340,18 @@ if st.session_state.workflow_data is not None:
                                     # Reload data
                                     data_sweep = Data(signal_path, openbeam_path,
                                                      flux=flux_orig, duration=duration_orig, freq=freq_orig)
+
+                                    # Apply wavelength filtering (by filtering time range)
+                                    if data_sweep.data is not None and data_sweep.op_data is not None:
+                                        # Filter signal data
+                                        mask_signal = (data_sweep.data['time'] >= tof_min_us) & (data_sweep.data['time'] <= tof_max_us)
+                                        data_sweep.data = data_sweep.data[mask_signal].copy()
+                                        data_sweep.table = data_sweep.data  # Update legacy reference
+
+                                        # Filter openbeam data
+                                        mask_openbeam = (data_sweep.op_data['time'] >= tof_min_us) & (data_sweep.op_data['time'] <= tof_max_us)
+                                        data_sweep.op_data = data_sweep.op_data[mask_openbeam].copy()
+                                        data_sweep.openbeam_table = data_sweep.op_data  # Update legacy reference
 
                                     # Apply stages
                                     if apply_convolution:

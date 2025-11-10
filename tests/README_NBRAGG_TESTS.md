@@ -63,6 +63,27 @@ Tests graceful fallback when nbragg is not available.
 python tests/test_nbragg_fallback.py
 ```
 
+### **test_wavelength_filtering.py**
+Tests wavelength filtering functionality in Streamlit app.
+- Tests wavelength ↔ TOF conversion (de Broglie relation)
+- Verifies data filtering by wavelength range
+- Tests with different wavelength ranges
+- Default range: 1.0 - 10.0 Å
+
+```bash
+python tests/test_wavelength_filtering.py
+```
+
+### **test_streamlit_wavelength.py**
+Tests complete Streamlit pipeline with wavelength filtering.
+- End-to-end test with default settings (1-10 Å)
+- Verifies full processing pipeline works after filtering
+- Tests reconstruction and nbragg analysis with filtered data
+
+```bash
+python tests/test_streamlit_wavelength.py
+```
+
 ## 📊 Plot Testing Scripts
 
 ### **test_final_plot.py**
