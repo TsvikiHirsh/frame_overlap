@@ -284,14 +284,17 @@ class Reconstruct:
             - 'wiener': Wiener deconvolution (default)
             - 'wiener_smooth': Wiener with smoothing before deconvolution
             - 'wiener_adaptive': Scipy adaptive Wiener + deconvolution
+            - 'fobi': FOBI Wiener deconvolution (uses conjugate, like original FOBI code)
             - 'lucy': Richardson-Lucy deconvolution
             - 'tikhonov': Tikhonov regularization
         noise_power : float, optional
             Noise power parameter for regularization. Default is 0.01.
         **kwargs
             Additional keyword arguments for specific filters:
-            - smooth_window : int, window size for smoothing (wiener_smooth)
+            - smooth_window : int, window size for smoothing (wiener_smooth, fobi)
             - mysize : int, window for adaptive filter (wiener_adaptive)
+            - sg_order : int, Savitzky-Golay filter order for FOBI (default 1)
+            - roll_shift : int, circular shift to apply to FOBI output (default 0)
 
         Returns
         -------
@@ -342,13 +345,15 @@ class Reconstruct:
                 reconstructed_signal = self._wiener_filter(noise_power, smooth=True, **kwargs)
             elif kind == 'wiener_adaptive':
                 reconstructed_signal = self._wiener_adaptive_filter(**kwargs)
+            elif kind == 'fobi':
+                reconstructed_signal = self._fobi_filter(noise_power, **kwargs)
             elif kind == 'lucy' or kind == 'richardson-lucy':
                 reconstructed_signal = self._lucy_richardson_filter(**kwargs)
             elif kind == 'tikhonov':
                 reconstructed_signal = self._tikhonov_filter(noise_power, **kwargs)
             else:
                 raise ValueError(f"Unknown filter kind '{kind}'. "
-                               f"Choose from: 'wiener', 'wiener_smooth', 'wiener_adaptive', 'lucy', 'tikhonov'")
+                               f"Choose from: 'wiener', 'wiener_smooth', 'wiener_adaptive', 'fobi', 'lucy', 'tikhonov'")
 
         # Create reconstructed signal DataFrame
         self.reconstructed_data = pd.DataFrame({
@@ -374,6 +379,8 @@ class Reconstruct:
                     reconstructed_ob = self._wiener_filter(noise_power, smooth=True, **kwargs)
                 elif kind == 'wiener_adaptive':
                     reconstructed_ob = self._wiener_adaptive_filter(**kwargs)
+                elif kind == 'fobi':
+                    reconstructed_ob = self._fobi_filter(noise_power, **kwargs)
                 elif kind == 'lucy' or kind == 'richardson-lucy':
                     reconstructed_ob = self._lucy_richardson_filter(**kwargs)
                 elif kind == 'tikhonov':
@@ -498,6 +505,120 @@ class Reconstruct:
         x_est = np.real(np.fft.ifft(X_est))
 
         return x_est
+
+    def _fobi_filter(self, noise_power, smooth_window=5, sg_order=1, roll_shift=0, **kwargs):
+        """
+        Apply FOBI-style Wiener deconvolution (from original FOBI code).
+
+        This method follows the original FOBI approach:
+        1. Optional Savitzky-Golay smoothing
+        2. Wiener deconvolution using conjugate (F * conj(G))
+        3. Optional circular shift of output
+
+        Parameters
+        ----------
+        noise_power : float
+            Wiener regularization parameter (called 'c' in FOBI code)
+        smooth_window : int, optional
+            Window size for Savitzky-Golay filter. Default is 5.
+        sg_order : int, optional
+            Order for Savitzky-Golay polynomial. Default is 1.
+        roll_shift : int, optional
+            Circular shift to apply to output. Default is 0.
+
+        Returns
+        -------
+        np.ndarray
+            Reconstructed signal
+
+        Notes
+        -----
+        This implements the FOBI wiener_deconvolution function:
+            F = fft(f)
+            G = fft(g)
+            H = ifft(F * conj(G) / (|G|^2 + c))
+        """
+        observed = self.data.table['counts'].values.copy()
+
+        # Apply Savitzky-Golay smoothing if window > 1
+        if smooth_window > 1:
+            observed = self._savitzky_golay_filter(observed, smooth_window, sg_order)
+
+        # Reconstruct the kernel
+        kernel = self._reconstruct_kernel()
+
+        # Pad kernel to match observed signal length
+        if len(kernel) < len(observed):
+            kernel_padded = np.pad(kernel, (0, len(observed) - len(kernel)), 'constant')
+        else:
+            kernel_padded = kernel[:len(observed)]
+
+        # FOBI Wiener deconvolution using conjugate
+        F = np.fft.fft(observed)
+        G = np.fft.fft(kernel_padded)
+        G_conj = np.conj(G)
+
+        # Wiener filter: F * conj(G) / (|G|^2 + c)
+        denominator = np.abs(G)**2 + noise_power
+        H = F * G_conj / denominator
+        reconstructed = np.real(np.fft.ifft(H))
+
+        # Apply circular shift if requested
+        if roll_shift != 0:
+            reconstructed = np.roll(reconstructed, -int(roll_shift))
+
+        return reconstructed
+
+    def _savitzky_golay_filter(self, y, window_size, order):
+        """
+        Apply Savitzky-Golay filter for smoothing.
+
+        This is adapted from the FOBI savitzky_golay function.
+
+        Parameters
+        ----------
+        y : np.ndarray
+            Signal to smooth
+        window_size : int
+            Window size (must be odd)
+        order : int
+            Polynomial order
+
+        Returns
+        -------
+        np.ndarray
+            Smoothed signal
+        """
+        from math import factorial
+        from scipy.ndimage import uniform_filter1d
+
+        # Validate parameters
+        window_size = abs(int(window_size))
+        order = abs(int(order))
+
+        if window_size % 2 != 1 or window_size < 1:
+            # Fall back to simple moving average if window not odd
+            return uniform_filter1d(y, size=window_size if window_size > 0 else 5, mode='nearest')
+
+        if window_size < order + 2:
+            # Window too small, fall back to simple filter
+            return uniform_filter1d(y, size=window_size, mode='nearest')
+
+        order_range = range(order + 1)
+        half_window = (window_size - 1) // 2
+
+        # Compute coefficients (numpy 2.0 compatible)
+        b = np.asmatrix([[k**i for i in order_range]
+                         for k in range(-half_window, half_window + 1)])
+        m = np.asarray(np.linalg.pinv(b))[0] * factorial(0)
+
+        # Pad signal at extremes
+        firstvals = y[0] - np.abs(y[1:half_window + 1][::-1] - y[0])
+        lastvals = y[-1] + np.abs(y[-half_window - 1:-1][::-1] - y[-1])
+        y_padded = np.concatenate((firstvals, y, lastvals))
+
+        # Apply filter
+        return np.convolve(m[::-1], y_padded, mode='valid')
 
     def _lucy_richardson_filter(self, iterations=10, **kwargs):
         """
