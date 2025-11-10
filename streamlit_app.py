@@ -774,6 +774,14 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
                     recon_params["sg_order"] = sg_order
                 recon_params["smooth_window"] = smooth_window
 
+                # Interpolated kernel option (official FOBI style)
+                interpolate_kernel = st.checkbox(
+                    "Use Interpolated Kernel",
+                    value=True,
+                    help="Official FOBI uses interpolated kernel for sub-bin precision. Recommended for best accuracy."
+                )
+                recon_params["interpolate_kernel"] = interpolate_kernel
+
         else:  # lucy
             iterations = st.slider(
                 "Iterations",

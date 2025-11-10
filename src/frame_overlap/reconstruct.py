@@ -295,6 +295,7 @@ class Reconstruct:
             - mysize : int, window for adaptive filter (wiener_adaptive)
             - sg_order : int, Savitzky-Golay filter order for FOBI (default 1)
             - roll_shift : int, circular shift to apply to FOBI output (default 0)
+            - interpolate_kernel : bool, use interpolated kernel for FOBI (default True)
 
         Returns
         -------
@@ -506,7 +507,8 @@ class Reconstruct:
 
         return x_est
 
-    def _fobi_filter(self, noise_power, smooth_window=5, sg_order=1, roll_shift=0, **kwargs):
+    def _fobi_filter(self, noise_power, smooth_window=5, sg_order=1, roll_shift=0,
+                     interpolate_kernel=True, **kwargs):
         """
         Apply FOBI-style Wiener deconvolution (from original FOBI code).
 
@@ -518,13 +520,18 @@ class Reconstruct:
         Parameters
         ----------
         noise_power : float
-            Wiener regularization parameter (called 'c' in FOBI code)
+            Wiener regularization parameter (called 'c' in FOBI code).
+            Official FOBI uses c=0.1 (1e-1).
         smooth_window : int, optional
             Window size for Savitzky-Golay filter. Default is 5.
         sg_order : int, optional
             Order for Savitzky-Golay polynomial. Default is 1.
         roll_shift : int, optional
             Circular shift to apply to output. Default is 0.
+        interpolate_kernel : bool, optional
+            If True (default), use interpolated kernel for sub-bin precision
+            (matches official FOBI implementation). If False, use discrete
+            delta functions.
 
         Returns
         -------
@@ -537,6 +544,9 @@ class Reconstruct:
             F = fft(f)
             G = fft(g)
             H = ifft(F * conj(G) / (|G|^2 + c))
+
+        The official FOBI uses interpolated kernels where frame delays are
+        distributed across adjacent bins for sub-bin precision.
         """
         observed = self.data.table['counts'].values.copy()
 
@@ -544,8 +554,8 @@ class Reconstruct:
         if smooth_window > 1:
             observed = self._savitzky_golay_filter(observed, smooth_window, sg_order)
 
-        # Reconstruct the kernel
-        kernel = self._reconstruct_kernel()
+        # Reconstruct the kernel (with optional interpolation for official FOBI style)
+        kernel = self._reconstruct_kernel(interpolate=interpolate_kernel)
 
         # Pad kernel to match observed signal length
         if len(kernel) < len(observed):
@@ -705,12 +715,18 @@ class Reconstruct:
 
         return x_est
 
-    def _reconstruct_kernel(self):
+    def _reconstruct_kernel(self, interpolate=False):
         """
         Reconstruct the convolution kernel from the frame overlap sequence.
 
         The kernel represents the overlap operation as a convolution.
         For frame overlap, each frame contributes a delta function at its start position.
+
+        Parameters
+        ----------
+        interpolate : bool, optional
+            If True, use interpolated kernel for sub-bin precision (FOBI style).
+            If False (default), use discrete delta functions at rounded bin positions.
 
         Returns
         -------
@@ -730,23 +746,46 @@ class Reconstruct:
         kernel_us = np.array(self.data.kernel) * 1000  # ms to µs
         frame_starts_us = np.cumsum(kernel_us)  # Cumulative positions
 
-        # Convert to bin indices
-        frame_starts_bins = np.round(frame_starts_us / bin_width).astype(int)
+        # Convert to bin indices (fractional for interpolation)
+        frame_starts_bins_float = frame_starts_us / bin_width
 
-        # Create kernel with delta functions at frame start positions
-        # The kernel length should cover all frame starts
-        if len(frame_starts_bins) > 0:
-            kernel_length = max(frame_starts_bins[-1] + 1, 1)
+        if interpolate:
+            # Official FOBI style: interpolated kernel for sub-bin precision
+            # This distributes intensity across adjacent bins
+            if len(frame_starts_bins_float) > 0:
+                kernel_length = max(int(np.ceil(frame_starts_bins_float[-1])) + 1, 1)
+            else:
+                kernel_length = 1
+
+            kernel = np.zeros(kernel_length)
+            n_frames = len(self.data.kernel)
+
+            for bin_idx_float in frame_starts_bins_float:
+                bin_floor = int(np.floor(bin_idx_float))
+                rest = bin_idx_float - bin_floor
+
+                # Distribute intensity across two adjacent bins
+                if bin_floor < kernel_length:
+                    kernel[bin_floor] += (1.0 - rest) / n_frames
+                if bin_floor + 1 < kernel_length:
+                    kernel[bin_floor + 1] += rest / n_frames
         else:
-            kernel_length = 1
+            # Original discrete approach: delta functions at rounded positions
+            frame_starts_bins = np.round(frame_starts_bins_float).astype(int)
 
-        kernel = np.zeros(kernel_length)
+            # Create kernel with delta functions at frame start positions
+            if len(frame_starts_bins) > 0:
+                kernel_length = max(frame_starts_bins[-1] + 1, 1)
+            else:
+                kernel_length = 1
 
-        # Place delta functions (value = 1/n_frames for normalization)
-        n_frames = len(self.data.kernel)
-        for bin_idx in frame_starts_bins:
-            if bin_idx < len(kernel):
-                kernel[bin_idx] = 1.0 / n_frames
+            kernel = np.zeros(kernel_length)
+
+            # Place delta functions (value = 1/n_frames for normalization)
+            n_frames = len(self.data.kernel)
+            for bin_idx in frame_starts_bins:
+                if bin_idx < len(kernel):
+                    kernel[bin_idx] = 1.0 / n_frames
 
         return kernel
 
