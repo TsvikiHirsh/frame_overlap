@@ -326,20 +326,29 @@ class Reconstruct:
 
         kind = kind.lower()
 
-        # Reconstruct signal
-        if kind == 'wiener':
-            reconstructed_signal = self._wiener_filter(noise_power, smooth=False, **kwargs)
-        elif kind == 'wiener_smooth':
-            reconstructed_signal = self._wiener_filter(noise_power, smooth=True, **kwargs)
-        elif kind == 'wiener_adaptive':
-            reconstructed_signal = self._wiener_adaptive_filter(**kwargs)
-        elif kind == 'lucy' or kind == 'richardson-lucy':
-            reconstructed_signal = self._lucy_richardson_filter(**kwargs)
-        elif kind == 'tikhonov':
-            reconstructed_signal = self._tikhonov_filter(noise_power, **kwargs)
+        # Check if we have a single-frame case (kernel = [0])
+        # In this case, no deconvolution is needed - just return the overlapped data
+        is_single_frame = (len(self.data.kernel) == 1 and self.data.kernel[0] == 0)
+
+        if is_single_frame:
+            # Single frame: no overlap, no deconvolution needed
+            # Just return the overlapped data as-is (it's identical to the pre-overlap data)
+            reconstructed_signal = self.data.table['counts'].values.copy()
         else:
-            raise ValueError(f"Unknown filter kind '{kind}'. "
-                           f"Choose from: 'wiener', 'wiener_smooth', 'wiener_adaptive', 'lucy', 'tikhonov'")
+            # Multiple frames: apply deconvolution
+            if kind == 'wiener':
+                reconstructed_signal = self._wiener_filter(noise_power, smooth=False, **kwargs)
+            elif kind == 'wiener_smooth':
+                reconstructed_signal = self._wiener_filter(noise_power, smooth=True, **kwargs)
+            elif kind == 'wiener_adaptive':
+                reconstructed_signal = self._wiener_adaptive_filter(**kwargs)
+            elif kind == 'lucy' or kind == 'richardson-lucy':
+                reconstructed_signal = self._lucy_richardson_filter(**kwargs)
+            elif kind == 'tikhonov':
+                reconstructed_signal = self._tikhonov_filter(noise_power, **kwargs)
+            else:
+                raise ValueError(f"Unknown filter kind '{kind}'. "
+                               f"Choose from: 'wiener', 'wiener_smooth', 'wiener_adaptive', 'lucy', 'tikhonov'")
 
         # Create reconstructed signal DataFrame
         self.reconstructed_data = pd.DataFrame({
@@ -350,23 +359,28 @@ class Reconstruct:
 
         # Reconstruct openbeam if available
         if self.data.op_overlapped_data is not None:
-            # Temporarily swap data to reconstruct openbeam
-            original_table = self.data.table
-            self.data.table = self.data.op_overlapped_data
+            if is_single_frame:
+                # Single frame: no deconvolution needed for openbeam either
+                reconstructed_ob = self.data.op_overlapped_data['counts'].values.copy()
+            else:
+                # Multiple frames: apply deconvolution to openbeam
+                # Temporarily swap data to reconstruct openbeam
+                original_table = self.data.table
+                self.data.table = self.data.op_overlapped_data
 
-            if kind == 'wiener':
-                reconstructed_ob = self._wiener_filter(noise_power, smooth=False, **kwargs)
-            elif kind == 'wiener_smooth':
-                reconstructed_ob = self._wiener_filter(noise_power, smooth=True, **kwargs)
-            elif kind == 'wiener_adaptive':
-                reconstructed_ob = self._wiener_adaptive_filter(**kwargs)
-            elif kind == 'lucy' or kind == 'richardson-lucy':
-                reconstructed_ob = self._lucy_richardson_filter(**kwargs)
-            elif kind == 'tikhonov':
-                reconstructed_ob = self._tikhonov_filter(noise_power, **kwargs)
+                if kind == 'wiener':
+                    reconstructed_ob = self._wiener_filter(noise_power, smooth=False, **kwargs)
+                elif kind == 'wiener_smooth':
+                    reconstructed_ob = self._wiener_filter(noise_power, smooth=True, **kwargs)
+                elif kind == 'wiener_adaptive':
+                    reconstructed_ob = self._wiener_adaptive_filter(**kwargs)
+                elif kind == 'lucy' or kind == 'richardson-lucy':
+                    reconstructed_ob = self._lucy_richardson_filter(**kwargs)
+                elif kind == 'tikhonov':
+                    reconstructed_ob = self._tikhonov_filter(noise_power, **kwargs)
 
-            # Restore original table
-            self.data.table = original_table
+                # Restore original table
+                self.data.table = original_table
 
             # Create reconstructed openbeam DataFrame
             self.reconstructed_openbeam = pd.DataFrame({
