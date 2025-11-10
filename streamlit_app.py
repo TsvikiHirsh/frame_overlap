@@ -795,14 +795,42 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
         )
 
         st.markdown("**Fitting Options**")
-        vary_background = st.checkbox("Vary Background", value=True,
-                                     help="Allow background to vary during fitting")
-        vary_response = st.checkbox("Vary Response", value=True,
-                                   help="Allow response function to vary during fitting")
+        col1, col2 = st.columns(2)
+        with col1:
+            vary_background = st.checkbox("Vary Background", value=True,
+                                         help="Allow background to vary during fitting")
+            vary_response = st.checkbox("Vary Response", value=True,
+                                       help="Allow response function to vary during fitting")
+            vary_weights = st.checkbox("Vary Weights", value=True,
+                                      help="Allow material weights to vary during fitting")
+        with col2:
+            vary_sans = st.checkbox("Vary SANS", value=False,
+                                   help="Allow SANS parameters to vary during fitting")
+            vary_extinction = st.checkbox("Vary Extinction", value=False,
+                                         help="Include extinction parameters (only for iron_with_cellulose)")
+
+        # Advanced parameters
+        with st.expander("Advanced Parameters"):
+            thickness_guess = st.number_input(
+                "Thickness Guess (cm)",
+                min_value=0.1,
+                max_value=10.0,
+                value=1.95,
+                step=0.05,
+                format="%.2f",
+                help="Initial guess for sample thickness in cm"
+            )
+            norm_fixed = st.checkbox("Fix Normalization to 1.0", value=True,
+                                    help="Keep normalization parameter fixed at 1.0")
     else:
         nbragg_model = "iron"
         vary_background = True
         vary_response = True
+        vary_weights = True
+        vary_sans = False
+        vary_extinction = False
+        thickness_guess = 1.95
+        norm_fixed = True
 
 # Process button at the bottom (duplicate for convenience)
 st.sidebar.markdown("---")
@@ -870,8 +898,20 @@ if process_button or process_button_bottom:
             # Analysis (nbragg fitting)
             if apply_analysis and apply_reconstruction and apply_overlap and ANALYSIS_AVAILABLE:
                 try:
-                    analysis = Analysis(xs=nbragg_model, vary_background=vary_background,
-                                       vary_response=vary_response)
+                    # Prepare kwargs for Analysis
+                    analysis_kwargs = {
+                        'vary_background': vary_background,
+                        'vary_response': vary_response,
+                        'vary_weights': vary_weights,
+                        'vary_sans': vary_sans,
+                        'vary_extinction': vary_extinction,
+                        'thickness_guess': thickness_guess,
+                        'norm_guess': 1.0 if norm_fixed else None
+                    }
+                    # Remove None values
+                    analysis_kwargs = {k: v for k, v in analysis_kwargs.items() if v is not None}
+
+                    analysis = Analysis(xs=nbragg_model, **analysis_kwargs)
 
                     # Prepare nbragg data and clean NaN/Inf values (critical for fitting!)
                     nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
@@ -1440,9 +1480,19 @@ if st.session_state.workflow_data is not None:
                                     # Run nbragg analysis if enabled
                                     if apply_analysis and ANALYSIS_AVAILABLE:
                                         try:
-                                            analysis_sweep = Analysis(xs=nbragg_model,
-                                                                     vary_background=vary_background,
-                                                                     vary_response=vary_response)
+                                            # Use same analysis kwargs as main pipeline
+                                            sweep_analysis_kwargs = {
+                                                'vary_background': vary_background,
+                                                'vary_response': vary_response,
+                                                'vary_weights': vary_weights,
+                                                'vary_sans': vary_sans,
+                                                'vary_extinction': vary_extinction,
+                                                'thickness_guess': thickness_guess,
+                                                'norm_guess': 1.0 if norm_fixed else None
+                                            }
+                                            sweep_analysis_kwargs = {k: v for k, v in sweep_analysis_kwargs.items() if v is not None}
+
+                                            analysis_sweep = Analysis(xs=nbragg_model, **sweep_analysis_kwargs)
                                             nbragg_result = analysis_sweep.fit(recon_sweep)
 
                                             # Extract nbragg parameters

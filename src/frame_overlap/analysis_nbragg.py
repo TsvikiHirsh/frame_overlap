@@ -70,7 +70,8 @@ class Analysis:
     >>> result = analysis.fit(recon)
     """
 
-    def __init__(self, xs='iron', vary_weights=False, vary_background=True, **kwargs):
+    def __init__(self, xs='iron', vary_weights=False, vary_background=True,
+                 vary_sans=False, vary_extinction=False, **kwargs):
         """
         Initialize Analysis with cross-section specification.
 
@@ -80,14 +81,20 @@ class Analysis:
             Cross-section specification. Available predefined options:
             - 'iron': Simple Fe_sg229_Iron-alpha (use with vary_background=True, vary_response=True)
             - 'iron_square_response': Iron with square response
-            - 'iron_with_cellulose': Iron with cellulose background
+            - 'iron_with_cellulose': Iron with cellulose background (2% cellulose, 98% Fe_alpha)
         vary_weights : bool
-            Whether to vary material weights
+            Whether to vary material weights. Default is False.
         vary_background : bool
-            Whether to vary background
+            Whether to vary background. Default is True.
+        vary_sans : bool
+            Whether to vary SANS parameters. Default is False.
+        vary_extinction : bool
+            Whether to include extinction parameters. Default is False.
         **kwargs
             Additional arguments for nbragg.TransmissionModel, including:
             - vary_response: Whether to vary response function (e.g., for 'iron' model)
+            - thickness_guess: Initial guess for thickness in cm (default 1.95)
+            - norm_guess: Initial guess for normalization (default 1.0)
         """
         try:
             import nbragg
@@ -100,6 +107,8 @@ class Analysis:
         self.nbragg = nbragg
         self.vary_weights = vary_weights
         self.vary_background = vary_background
+        self.vary_sans = vary_sans
+        self.vary_extinction = vary_extinction
         self.kwargs = kwargs
         self.result = None
         self.data = None  # Will store nbragg.Data after fit()
@@ -118,12 +127,27 @@ class Analysis:
                 f"xs must be a string, CrossSection object, or dict, got {type(xs)}"
             )
 
+        # Extract thickness and norm guesses from kwargs
+        thickness_guess = kwargs.pop('thickness_guess', 1.95)  # cm
+        norm_guess = kwargs.pop('norm_guess', 1.0)
+
         # Create transmission model
         self.model = nbragg.TransmissionModel(
             self.xs,
             vary_background=vary_background,
             **kwargs
         )
+
+        # Set initial parameter values
+        if hasattr(self.model, 'params'):
+            # Set thickness guess
+            for param_name in self.model.params:
+                if 'thickness' in param_name.lower() or param_name == 'L':
+                    self.model.params[param_name].value = thickness_guess
+                # Set norm to 1.0 and fix it
+                if 'norm' in param_name.lower():
+                    self.model.params[param_name].value = norm_guess
+                    self.model.params[param_name].vary = False
 
         # Set parameter variations
         if vary_weights and hasattr(self.model, 'set_vary_weights'):
@@ -144,22 +168,55 @@ class Analysis:
             )
 
     def _iron_with_cellulose(self):
-        """Create iron with cellulose cross-section."""
-        try:
-            iron = self.nbragg.materials.get("Fe_sg225_Iron-gamma")
-            cellulose = self.nbragg.materials.get("C6H10O5_Cellulose")
+        """
+        Create iron with cellulose cross-section (2% cellulose, 98% Fe_alpha).
 
-            if iron is None or cellulose is None:
-                raise ValueError("Required materials not found in nbragg")
+        Registers cellulose from notebooks/Cellulose_C6O5H10.ncmat if not already available.
+        If vary_extinction=True, adds extinction parameters using Uncorr_Sabine method.
+        """
+        import os
+        from pathlib import Path
+
+        try:
+            # Register cellulose material if not already available
+            cellulose_ncmat = Path("notebooks/Cellulose_C6O5H10.ncmat")
+            if cellulose_ncmat.exists():
+                # Register the cellulose material
+                self.nbragg.register_material(str(cellulose_ncmat))
+
+            # Use Fe_sg229_Iron-alpha as specified
+            iron = "Fe_sg229_Iron-alpha.ncmat"
+            cellulose = str(cellulose_ncmat) if cellulose_ncmat.exists() else "Cellulose_C6O5H10.ncmat"
+
+            # Create base materials dict with 2% cellulose, 98% iron
+            iron_mat = {'mat': iron, 'weight': 0.98}
+            cellulose_mat = {'mat': cellulose, 'weight': 0.02}
+
+            # Add extinction parameters to iron if requested
+            if self.vary_extinction:
+                # Add extinction parameters for Fe_alpha
+                # ext_method: Uncorr_Sabine
+                # ext_dist: tri (triangular distribution)
+                # ext_L: 100000 µm = 10 cm
+                # ext_l: 100 µm
+                # ext_g: 100 µm
+                iron_mat['ext_method'] = 'Uncorr_Sabine'
+                iron_mat['ext_dist'] = 'tri'
+                iron_mat['ext_L'] = 100000  # µm
+                iron_mat['ext_l'] = 100     # µm
+                iron_mat['ext_g'] = 100     # µm
 
             return self.nbragg.CrossSection(
-                iron=iron,
-                cellulose=cellulose
+                materials={
+                    'iron': iron_mat,
+                    'cellulose': cellulose_mat
+                }
             )
+
         except Exception as e:
             raise ValueError(
                 f"Failed to create iron_with_cellulose cross-section: {e}. "
-                f"Make sure nbragg has the required materials."
+                f"Make sure cellulose ncmat is in notebooks/ folder."
             )
 
     def _iron_square_response(self):
