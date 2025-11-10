@@ -850,6 +850,18 @@ if process_button or process_button_bottom:
             if apply_reconstruction and apply_overlap:
                 recon = Reconstruct(data, tmin=tmin, tmax=tmax)
                 recon.filter(kind=recon_method, **recon_params)
+
+                # Filter reconstructed data to match wavelength range
+                # This ensures the reconstructed time grid aligns with the filtered input data
+                if recon.reconstructed_data is not None and recon.reconstructed_openbeam is not None:
+                    mask_recon = (recon.reconstructed_data['time'] >= tof_min_us) & \
+                                 (recon.reconstructed_data['time'] <= tof_max_us)
+                    recon.reconstructed_data = recon.reconstructed_data[mask_recon].copy()
+
+                    mask_recon_ob = (recon.reconstructed_openbeam['time'] >= tof_min_us) & \
+                                    (recon.reconstructed_openbeam['time'] <= tof_max_us)
+                    recon.reconstructed_openbeam = recon.reconstructed_openbeam[mask_recon_ob].copy()
+
                 st.session_state.recon = recon
 
                 stats = recon.get_statistics()
@@ -1401,6 +1413,16 @@ if st.session_state.workflow_data is not None:
                                     else:
                                         recon_sweep = Reconstruct(data_sweep, tmin=tmin, tmax=tmax)
                                         recon_sweep.filter(kind=recon_method, **recon_params)
+
+                                    # Filter reconstructed data to match wavelength range
+                                    if recon_sweep.reconstructed_data is not None and recon_sweep.reconstructed_openbeam is not None:
+                                        mask_recon = (recon_sweep.reconstructed_data['time'] >= tof_min_us) & \
+                                                     (recon_sweep.reconstructed_data['time'] <= tof_max_us)
+                                        recon_sweep.reconstructed_data = recon_sweep.reconstructed_data[mask_recon].copy()
+
+                                        mask_recon_ob = (recon_sweep.reconstructed_openbeam['time'] >= tof_min_us) & \
+                                                        (recon_sweep.reconstructed_openbeam['time'] <= tof_max_us)
+                                        recon_sweep.reconstructed_openbeam = recon_sweep.reconstructed_openbeam[mask_recon_ob].copy()
 
                                     # Get reconstruction statistics
                                     stats = recon_sweep.get_statistics()
