@@ -270,12 +270,13 @@ class Data:
         })
         return result
 
-    def overlap(self, kernel, total_time=None, freq=None, bin_width=10, poisson_seed=None):
+    def overlap(self, kernel, total_time=None, freq=None, bin_width=10, poisson_seed=None, mode='superimpose'):
         """
         Create overlapping frame structure.
 
-        This method duplicates the data into multiple frames with specified time
-        delays. Applies to both signal and openbeam.
+        This method simulates frame overlap by either superimposing shifted copies
+        (FOBI-style, matches real neutron instruments) or extending the time window
+        (synthetic approach). Applies to both signal and openbeam.
 
         **OPTIONAL SECOND POISSON**: If `poisson_seed` is provided, a second Poisson
         sampling with duty_cycle=1.0 will be applied AFTER overlap to add randomness
@@ -293,8 +294,8 @@ class Data:
             - Frame 4 starts at t=22+25=47 ms
         total_time : float, optional
             Total time frame in milliseconds. If None, deduced automatically.
-            If specified and shorter than the overlapped signal, the excess tail
-            wraps around to the beginning of the spectrum.
+            - For mode='superimpose': ignored, uses input data length
+            - For mode='extend': sets the extended time window
         freq : float, optional
             Frequency in Hz. If provided, total_time = 1000/freq ms.
             For example, freq=20 Hz means total_time=50 ms.
@@ -303,6 +304,13 @@ class Data:
         poisson_seed : int, optional
             If provided, apply a second Poisson sampling (duty_cycle=1.0) after overlap
             using this seed. This adds randomness to the overlapped signal. Default is None.
+        mode : str, optional
+            Overlap mode. Options:
+            - 'superimpose' (default): FOBI-style overlap within SAME time window.
+              Matches real neutron instrument physics. Recommended for proper
+              reconstruction testing.
+            - 'extend': Extends time window and places frames sequentially.
+              Legacy mode for backward compatibility.
 
         Returns
         -------
@@ -311,12 +319,12 @@ class Data:
 
         Examples
         --------
-        >>> data.overlap(kernel=[0, 12, 10, 25])  # Auto total time
-        >>> data.overlap(kernel=[0, 10], total_time=50)  # 50 ms total
-        >>> data.overlap(kernel=[0, 10], freq=20)  # 20 Hz = 50 ms total
-        >>> data.overlap(kernel=[0, 5, 10, 10, 20], total_time=50)  # Wraparound
+        >>> # FOBI-style superposition (recommended):
+        >>> data.overlap(kernel=[0, 12], mode='superimpose')
+        >>> # Legacy extended mode:
+        >>> data.overlap(kernel=[0, 12, 10, 25], mode='extend')
         >>> # With second Poisson to randomize overlapping:
-        >>> data.overlap(kernel=[0, 25], poisson_seed=42)  # Adds randomness
+        >>> data.overlap(kernel=[0, 25], poisson_seed=42)
         """
         # Use most recent stage: poissoned > convolved > data
         # CORRECT WORKFLOW: overlap should come AFTER poisson
@@ -347,7 +355,7 @@ class Data:
         self.n_overlapping_frames = len(kernel)
 
         # Apply overlap to signal
-        self.overlapped_data = self._create_overlap(source_data, kernel, total_time, bin_width)
+        self.overlapped_data = self._create_overlap(source_data, kernel, total_time, bin_width, mode)
         self.table = self.overlapped_data
 
         # Apply overlap to openbeam if available
@@ -355,7 +363,7 @@ class Data:
                     else self.op_convolved_data if self.op_convolved_data is not None
                     else self.op_data)
         if op_source is not None:
-            self.op_overlapped_data = self._create_overlap(op_source, kernel, total_time, bin_width)
+            self.op_overlapped_data = self._create_overlap(op_source, kernel, total_time, bin_width, mode)
             self.openbeam_table = self.op_overlapped_data
 
         # Apply optional second Poisson sampling to add randomness to overlapped signal
@@ -375,8 +383,16 @@ class Data:
 
         return self
 
-    def _create_overlap(self, df, kernel, total_time, bin_width):
-        """Helper to create overlap for a dataframe with wraparound support."""
+    def _create_overlap(self, df, kernel, total_time, bin_width, mode='superimpose'):
+        """
+        Helper to create overlap for a dataframe.
+
+        Parameters
+        ----------
+        mode : str
+            'superimpose': FOBI-style, keeps same time window, superimposes contributions
+            'extend': Legacy mode, extends time window and places frames sequentially
+        """
         # Convert kernel from milliseconds to microseconds
         kernel_us = np.array(kernel) * 1000
 
@@ -389,36 +405,69 @@ class Data:
         counts_array = df['counts'].values
         err_array = df['err'].values
 
-        # Determine total time frame (in microseconds)
-        if total_time is None:
-            # Auto-calculate: last frame start + data length
-            max_time_in_data = time_array.max()
-            total_time_us = frame_starts_us[-1] + max_time_in_data
+        if mode == 'superimpose':
+            # FOBI-style: superimpose within SAME time window
+            # This matches real neutron instrument physics
+            input_max_time = time_array.max()
+            n_bins = len(time_array)
+
+            # Create output arrays with SAME length as input
+            new_time = time_array.copy()
+            new_counts = np.zeros(n_bins)
+            new_err_squared = np.zeros(n_bins)
+
+            # Superimpose each frame within the same window
+            for frame_start_us in frame_starts_us:
+                # Calculate starting bin index for this frame
+                start_bin = int(np.round(frame_start_us / bin_width))
+
+                # Only add contributions that fall within the time window
+                for i, (t, count, err) in enumerate(zip(time_array, counts_array, err_array)):
+                    target_bin = i + start_bin
+                    if target_bin < n_bins:
+                        # Contribution falls within window
+                        new_counts[target_bin] += count
+                        new_err_squared[target_bin] += err**2
+
+            # Normalize by number of frames (to preserve mean count rate)
+            new_counts /= len(kernel)
+            new_err_squared /= len(kernel)**2
+
+        elif mode == 'extend':
+            # Legacy mode: extend time window and place frames sequentially
+            # Determine total time frame (in microseconds)
+            if total_time is None:
+                # Auto-calculate: last frame start + data length
+                max_time_in_data = time_array.max()
+                total_time_us = frame_starts_us[-1] + max_time_in_data
+            else:
+                # User provided total_time in milliseconds, convert to microseconds
+                total_time_us = total_time * 1000
+
+            # Round total_time to integer number of bins
+            n_bins = int(np.round(total_time_us / bin_width))
+            total_time_us = n_bins * bin_width
+
+            # Create output arrays (EXTENDED length)
+            new_time = np.arange(0, n_bins) * bin_width
+            new_counts = np.zeros(n_bins)
+            new_err_squared = np.zeros(n_bins)
+
+            # Add each frame to the overlapped signal with wraparound
+            for frame_start_us in frame_starts_us:
+                # Calculate starting bin index for this frame
+                start_bin = int(np.round(frame_start_us / bin_width))
+
+                # Calculate indices for all data points in this frame
+                data_bins = np.round(time_array / bin_width).astype(int)
+                target_bins = (start_bin + data_bins) % n_bins  # Wraparound with modulo
+
+                # Add counts and errors using array operations
+                np.add.at(new_counts, target_bins, counts_array)
+                np.add.at(new_err_squared, target_bins, err_array**2)
+
         else:
-            # User provided total_time in milliseconds, convert to microseconds
-            total_time_us = total_time * 1000
-
-        # Round total_time to integer number of bins
-        n_bins = int(np.round(total_time_us / bin_width))
-        total_time_us = n_bins * bin_width
-
-        # Create output arrays
-        new_time = np.arange(0, n_bins) * bin_width
-        new_counts = np.zeros(n_bins)
-        new_err_squared = np.zeros(n_bins)
-
-        # Add each frame to the overlapped signal with wraparound
-        for frame_start_us in frame_starts_us:
-            # Calculate starting bin index for this frame
-            start_bin = int(np.round(frame_start_us / bin_width))
-
-            # Calculate indices for all data points in this frame
-            data_bins = np.round(time_array / bin_width).astype(int)
-            target_bins = (start_bin + data_bins) % n_bins  # Wraparound with modulo
-
-            # Add counts and errors using array operations
-            np.add.at(new_counts, target_bins, counts_array)
-            np.add.at(new_err_squared, target_bins, err_array**2)
+            raise ValueError(f"Unknown mode '{mode}'. Use 'superimpose' or 'extend'.")
 
         # Calculate final errors
         new_err = np.sqrt(new_err_squared)
