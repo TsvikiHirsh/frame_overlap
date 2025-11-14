@@ -13,6 +13,15 @@ Analysis : Fit reconstructed data to extract material parameters
 Workflow : High-level interface for method chaining and parameter sweeps
 ParametricScan : Perform parametric scans over processing parameters
 
+Adaptive Bragg Edge Measurement
+--------------------------------
+BraggEdgeMeasurementSystem : Complete measurement system with TOF calibration
+AdaptiveEdgeOptimizer : Bayesian optimization for adaptive measurements
+BraggEdgeSample : Sample model with multiple Bragg edges
+IncidentSpectrum : Incident neutron spectrum models
+PatternLibrary : Collection of chopper pattern generation strategies
+PerformanceEvaluator : Tools for evaluating measurement strategies
+
 Legacy Functions
 ----------------
 The package also provides backward-compatible functional API:
@@ -29,6 +38,35 @@ from .analysis_nbragg import Analysis
 from .workflow import Workflow
 from .analysis_class import Analysis as LegacyAnalysis, CrossSection
 from .groupby import ParametricScan, compare_configurations
+
+# Adaptive Bragg Edge Measurement API
+from .bragg_edge_model import (
+    BraggEdge,
+    BraggEdgeSample,
+    IncidentSpectrum,
+    TOFCalibration,
+    MeasurementSimulator
+)
+from .chopper_patterns import PatternLibrary, ForwardModel
+from .adaptive_measurement import (
+    BayesianEdgeOptimizer,
+    GradientFocusedMeasurement,
+    MultiResolutionEdgeSearch,
+    RealTimeAdaptiveSystem,
+    EdgePosterior
+)
+from .bragg_edge_optimizer import (
+    BraggEdgeMeasurementSystem,
+    AdaptiveEdgeOptimizer,
+    MeasurementTarget,
+    OptimizationResult,
+    optimize_measurement_strategy
+)
+from .performance_metrics import (
+    PerformanceEvaluator,
+    PerformanceMetrics,
+    ComparisonResult
+)
 
 # Legacy functional API (for backward compatibility)
 from .data import read_tof_data, prepare_full_frame
@@ -47,6 +85,28 @@ __all__ = [
     'ParametricScan',
     'compare_configurations',
 
+    # Adaptive Bragg Edge API
+    'BraggEdge',
+    'BraggEdgeSample',
+    'IncidentSpectrum',
+    'TOFCalibration',
+    'MeasurementSimulator',
+    'PatternLibrary',
+    'ForwardModel',
+    'BayesianEdgeOptimizer',
+    'GradientFocusedMeasurement',
+    'MultiResolutionEdgeSearch',
+    'RealTimeAdaptiveSystem',
+    'EdgePosterior',
+    'BraggEdgeMeasurementSystem',
+    'AdaptiveEdgeOptimizer',
+    'MeasurementTarget',
+    'OptimizationResult',
+    'optimize_measurement_strategy',
+    'PerformanceEvaluator',
+    'PerformanceMetrics',
+    'ComparisonResult',
+
     # Legacy functional API
     'read_tof_data',
     'prepare_full_frame',
@@ -59,4 +119,4 @@ __all__ = [
     'plot_analysis',
 ]
 
-__version__ = '0.2.0'
+__version__ = '0.3.0'
