@@ -1,0 +1,153 @@
+ADAPTIVE FRAME OVERLAP TOF RECONSTRUCTION - FILE STRUCTURE
+===========================================================
+
+DOCUMENTATION (Created)
+-----------------------
+✅ ADAPTIVE_TOF_IMPLEMENTATION_PLAN.md    - Complete implementation plan (150+ pages)
+✅ IMPLEMENTATION_SUMMARY.md              - Executive summary and next steps
+✅ QUICKSTART_ADAPTIVE.md                 - Week-by-week getting started guide
+✅ BENCHMARKING_TEMPLATE.md               - Evaluation framework and templates
+✅ FILE_STRUCTURE.txt                     - This file
+
+CODE TEMPLATES (Created)
+-------------------------
+✅ src/frame_overlap/adaptive/__init__.py                      - Module initialization
+✅ src/frame_overlap/adaptive/event_data.py                    - Event data structures (complete)
+✅ src/frame_overlap/adaptive/reconstructors/__init__.py       - Reconstructors module
+✅ src/frame_overlap/adaptive/reconstructors/base.py           - Base reconstructor class (complete)
+
+CODE TO IMPLEMENT (Next Steps)
+-------------------------------
+Phase 1:
+  ⏳ src/frame_overlap/adaptive/simulation.py                  - Synthetic data generation
+  ⏳ src/frame_overlap/adaptive/reconstructors/baseline.py     - Baseline reconstructor (sketch provided)
+  ⏳ src/frame_overlap/adaptive/reconstructors/wiener_event.py - Wiener for events (sketch provided)
+  ⏳ tests/adaptive/test_event_data.py                         - Unit tests for event data
+  ⏳ tests/adaptive/test_simulation.py                         - Unit tests for simulation
+
+Phase 2:
+  ⏳ src/frame_overlap/adaptive/reconstructors/em_reconstructor.py  - EM algorithm
+  ⏳ src/frame_overlap/adaptive/uncertainty.py                      - Uncertainty quantification
+  ⏳ src/frame_overlap/adaptive/evaluation.py                       - Benchmarking suite (template provided)
+  ⏳ tests/adaptive/test_reconstructors.py                          - Reconstructor tests
+  ⏳ notebooks/adaptive/01_event_mode_intro.ipynb                   - Tutorial notebook
+
+Phase 3:
+  ⏳ src/frame_overlap/adaptive/kernel_manager.py              - Kernel library and selection
+  ⏳ src/frame_overlap/adaptive/adaptive_controller.py         - Adaptive control logic
+  ⏳ tests/adaptive/test_adaptive_controller.py                - Adaptive controller tests
+  ⏳ notebooks/adaptive/04_adaptive_kernels.ipynb              - Adaptive demo
+
+Phase 4:
+  ⏳ src/frame_overlap/adaptive/reconstructors/kalman_reconstructor.py  - Kalman filter
+  ⏳ src/frame_overlap/adaptive/reconstructors/ml_reconstructor.py      - Neural network (optional)
+
+EXISTING CODEBASE (No Changes Required)
+----------------------------------------
+✅ src/frame_overlap/data_class.py         - Data class (TOF data handling)
+✅ src/frame_overlap/reconstruct.py        - Reconstruct class (Wiener, Lucy-Richardson, Tikhonov)
+✅ src/frame_overlap/workflow.py           - Workflow class (method chaining)
+✅ src/frame_overlap/analysis_nbragg.py    - Bragg edge analysis
+✅ src/frame_overlap/analysis_resonance.py - Resonance analysis
+✅ src/frame_overlap/optimization.py       - Parameter optimization
+✅ tests/test_*.py                         - Existing tests (all pass)
+
+DIRECTORY STRUCTURE
+-------------------
+frame_overlap/
+├── README.md                              ✅ Existing
+├── ADAPTIVE_TOF_IMPLEMENTATION_PLAN.md    ✅ NEW - Main plan
+├── IMPLEMENTATION_SUMMARY.md              ✅ NEW - Summary
+├── QUICKSTART_ADAPTIVE.md                 ✅ NEW - Getting started
+├── BENCHMARKING_TEMPLATE.md               ✅ NEW - Benchmarks
+├── FILE_STRUCTURE.txt                     ✅ NEW - This file
+├── src/frame_overlap/
+│   ├── __init__.py                        ✅ Existing
+│   ├── data_class.py                      ✅ Existing
+│   ├── reconstruct.py                     ✅ Existing
+│   ├── workflow.py                        ✅ Existing
+│   ├── analysis_nbragg.py                 ✅ Existing
+│   ├── analysis_resonance.py              ✅ Existing
+│   ├── adaptive/                          ✅ NEW MODULE
+│   │   ├── __init__.py                    ✅ Created
+│   │   ├── event_data.py                  ✅ Created (complete)
+│   │   ├── simulation.py                  ⏳ To implement
+│   │   ├── uncertainty.py                 ⏳ To implement
+│   │   ├── evaluation.py                  ⏳ To implement
+│   │   ├── kernel_manager.py              ⏳ To implement
+│   │   ├── adaptive_controller.py         ⏳ To implement
+│   │   └── reconstructors/
+│   │       ├── __init__.py                ✅ Created
+│   │       ├── base.py                    ✅ Created (complete)
+│   │       ├── baseline.py                ⏳ To implement (sketch provided)
+│   │       ├── wiener_event.py            ⏳ To implement (sketch provided)
+│   │       ├── em_reconstructor.py        ⏳ To implement
+│   │       ├── kalman_reconstructor.py    ⏳ Phase 4
+│   │       └── ml_reconstructor.py        ⏳ Phase 4 (optional)
+│   └── ...
+├── tests/
+│   ├── test_frame_overlap.py              ✅ Existing
+│   ├── test_*.py                          ✅ Existing
+│   └── adaptive/                          ⏳ NEW TEST MODULE
+│       ├── test_event_data.py             ⏳ To implement
+│       ├── test_simulation.py             ⏳ To implement
+│       ├── test_reconstructors.py         ⏳ To implement
+│       ├── test_kernel_manager.py         ⏳ To implement
+│       ├── test_adaptive_controller.py    ⏳ To implement
+│       └── test_benchmarks.py             ⏳ To implement
+├── notebooks/
+│   ├── example_*.ipynb                    ✅ Existing
+│   └── adaptive/                          ⏳ NEW NOTEBOOKS
+│       ├── 01_event_mode_intro.ipynb      ⏳ To create
+│       ├── 02_baseline_comparison.ipynb   ⏳ To create
+│       ├── 03_em_reconstruction.ipynb     ⏳ To create
+│       ├── 04_adaptive_kernels.ipynb      ⏳ To create
+│       ├── 05_benchmarking.ipynb          ⏳ To create
+│       └── 06_real_data_validation.ipynb  ⏳ To create
+├── data/
+│   ├── synthetic/                         ⏳ To create (synthetic datasets)
+│   └── measured/                          ✅ Existing
+└── docs/
+    └── ...
+
+IMPLEMENTATION STATUS
+---------------------
+✅ Planning & Design:        100% Complete
+✅ Documentation:             100% Complete
+✅ Code Templates:            40% Complete (core data structures)
+⏳ Phase 1 Implementation:    20% Complete (need simulation + reconstructors)
+⏳ Phase 2 Implementation:    0% Complete
+⏳ Phase 3 Implementation:    0% Complete
+⏳ Phase 4 Implementation:    0% Complete
+
+NEXT IMMEDIATE STEPS
+--------------------
+1. Review IMPLEMENTATION_SUMMARY.md
+2. Read QUICKSTART_ADAPTIVE.md
+3. Decide on scope (MVP vs Full)
+4. Implement tests/adaptive/test_event_data.py
+5. Implement src/frame_overlap/adaptive/simulation.py
+6. Run: pytest tests/adaptive/ -v
+
+ESTIMATED TIMELINE
+------------------
+MVP (Phases 1-2):      4-6 weeks   (Event data + Baseline + Wiener + EM + Benchmarks)
+Full (Phases 1-3):     7-10 weeks  (MVP + Adaptive kernel selection)
+Complete (All phases): 10-14 weeks (Full + Kalman + Optimization + Real data)
+
+CONTACT & SUPPORT
+-----------------
+Documentation: See *.md files in project root
+Examples:      notebooks/ directory
+Tests:         tests/ directory for usage patterns
+Issues:        GitHub issue tracker
+
+LEGEND
+------
+✅ - Complete
+⏳ - To be implemented
+🔄 - In progress
+❌ - Blocked/Not needed
+
+Generated: 2025-11-13
+Version: 0.1.0
