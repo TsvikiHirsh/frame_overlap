@@ -65,7 +65,6 @@ st.markdown("""
 
 
 # Helper functions
-@st.cache_data
 def create_sample(material, edge_position, edge_height, edge_width, strain):
     """Create Bragg edge sample"""
     edge = BraggEdge(
@@ -80,7 +79,6 @@ def create_sample(material, edge_position, edge_height, edge_width, strain):
     )
 
 
-@st.cache_data
 def simulate_measurement_comparison(
     flight_path,
     edge_position,
