@@ -356,11 +356,17 @@ class Reconstruct:
                 raise ValueError(f"Unknown filter kind '{kind}'. "
                                f"Choose from: 'wiener', 'wiener_smooth', 'wiener_adaptive', 'fobi', 'lucy', 'tikhonov'")
 
+        # Scale reconstructed signal by number of frames
+        # The overlap() method normalizes by n_frames, and the kernel uses 1/n_frames
+        # So we need to multiply by n_frames to restore original amplitude
+        n_frames = len(self.data.kernel)
+        reconstructed_signal_scaled = reconstructed_signal * n_frames
+
         # Create reconstructed signal DataFrame
         self.reconstructed_data = pd.DataFrame({
             'time': self.data.table['time'].values,
-            'counts': reconstructed_signal,
-            'err': np.sqrt(np.maximum(reconstructed_signal, 1))
+            'counts': reconstructed_signal_scaled,
+            'err': np.sqrt(np.maximum(reconstructed_signal_scaled, 1))
         })
 
         # Reconstruct openbeam if available
@@ -390,11 +396,14 @@ class Reconstruct:
                 # Restore original table
                 self.data.table = original_table
 
+            # Scale openbeam by number of frames (same reason as signal)
+            reconstructed_ob_scaled = reconstructed_ob * n_frames
+
             # Create reconstructed openbeam DataFrame
             self.reconstructed_openbeam = pd.DataFrame({
                 'time': self.data.op_overlapped_data['time'].values,
-                'counts': reconstructed_ob,
-                'err': np.sqrt(np.maximum(reconstructed_ob, 1))
+                'counts': reconstructed_ob_scaled,
+                'err': np.sqrt(np.maximum(reconstructed_ob_scaled, 1))
             })
 
         # Calculate statistics
