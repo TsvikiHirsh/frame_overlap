@@ -998,16 +998,22 @@ class Reconstruct:
         else:
             raise ValueError("No openbeam data available for transmission calculation.")
 
+        # Use reconstructed openbeam for reconstructed transmission
+        if self.reconstructed_openbeam is None:
+            raise ValueError("No reconstructed openbeam available for transmission calculation.")
+
         # Match lengths
-        min_len = min(len(self.reference_data), len(self.reconstructed_data), len(ref_openbeam_data))
+        min_len = min(len(self.reference_data), len(self.reconstructed_data),
+                     len(ref_openbeam_data), len(self.reconstructed_openbeam))
 
         # Calculate transmissions
         ref_signal = self.reference_data['counts'].values[:min_len]
         recon_signal = self.reconstructed_data['counts'].values[:min_len]
         ref_openbeam = ref_openbeam_data['counts'].values[:min_len]
+        recon_openbeam = self.reconstructed_openbeam['counts'].values[:min_len]
 
         ref_transmission = ref_signal / np.maximum(ref_openbeam, 1)
-        recon_transmission = recon_signal / np.maximum(ref_openbeam, 1)
+        recon_transmission = recon_signal / np.maximum(recon_openbeam, 1)
 
         time_ms = self.reference_data['time'].values[:min_len] / 1000
 
@@ -1028,15 +1034,17 @@ class Reconstruct:
             ref_signal_err = self.reference_data['err'].values[:min_len]
             ref_openbeam_err = ref_openbeam_data['err'].values[:min_len]
             recon_signal_err = self.reconstructed_data['err'].values[:min_len]
+            recon_openbeam_err = self.reconstructed_openbeam['err'].values[:min_len]
 
             ref_signal_safe = np.maximum(np.abs(ref_signal), 1)
             ref_openbeam_safe = np.maximum(np.abs(ref_openbeam), 1)
             recon_signal_safe = np.maximum(np.abs(recon_signal), 1)
+            recon_openbeam_safe = np.maximum(np.abs(recon_openbeam), 1)
 
             ref_trans_err = np.abs(ref_transmission) * np.sqrt(
                 (ref_signal_err / ref_signal_safe)**2 + (ref_openbeam_err / ref_openbeam_safe)**2)
             recon_trans_err = np.abs(recon_transmission) * np.sqrt(
-                (recon_signal_err / recon_signal_safe)**2 + (ref_openbeam_err / ref_openbeam_safe)**2)
+                (recon_signal_err / recon_signal_safe)**2 + (recon_openbeam_err / recon_openbeam_safe)**2)
 
             ax_data.errorbar(time_ms, ref_transmission, yerr=np.abs(ref_trans_err),
                            fmt='none', ecolor='0.5', capsize=2, alpha=0.5)
