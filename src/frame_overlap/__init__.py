@@ -67,6 +67,19 @@ from .performance_metrics import (
     PerformanceMetrics,
     ComparisonResult
 )
+from .two_stage_measurement import (
+    TwoStageMeasurementStrategy,
+    OpenbeamMeasurement,
+    TwoStageResult,
+    OpenbeamLibrary,
+    estimate_openbeam_time_savings
+)
+from .tof_offset_correction import (
+    TOFOffsetCorrector,
+    OffsetCorrectionResult,
+    apply_offset_correction_to_workflow,
+    estimate_expected_offset
+)
 
 # Legacy functional API (for backward compatibility)
 from .data import read_tof_data, prepare_full_frame
@@ -106,6 +119,15 @@ __all__ = [
     'PerformanceEvaluator',
     'PerformanceMetrics',
     'ComparisonResult',
+    'TwoStageMeasurementStrategy',
+    'OpenbeamMeasurement',
+    'TwoStageResult',
+    'OpenbeamLibrary',
+    'estimate_openbeam_time_savings',
+    'TOFOffsetCorrector',
+    'OffsetCorrectionResult',
+    'apply_offset_correction_to_workflow',
+    'estimate_expected_offset',
 
     # Legacy functional API
     'read_tof_data',
