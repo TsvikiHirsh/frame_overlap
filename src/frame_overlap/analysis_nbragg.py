@@ -131,11 +131,28 @@ class Analysis:
         thickness_guess = kwargs.pop('thickness_guess', 1.95)  # cm
         norm_guess = kwargs.pop('norm_guess', 1.0)
 
-        # Create transmission model
+        # Create transmission model with all vary parameters
+        # Build the TransmissionModel kwargs
+        model_kwargs = {
+            'vary_background': vary_background,
+            **kwargs
+        }
+
+        # Add vary_weights if specified (not None)
+        if vary_weights is not None:
+            model_kwargs['vary_weights'] = vary_weights
+
+        # Add vary_sans if specified (not None)
+        if vary_sans is not None:
+            model_kwargs['vary_sans'] = vary_sans
+
+        # Add vary_extinction if specified (not None)
+        if vary_extinction is not None:
+            model_kwargs['vary_extinction'] = vary_extinction
+
         self.model = nbragg.TransmissionModel(
             self.xs,
-            vary_background=vary_background,
-            **kwargs
+            **model_kwargs
         )
 
         # Set initial parameter values
