@@ -270,7 +270,72 @@ class Data:
         })
         return result
 
-    def overlap(self, kernel, total_time=None, freq=None, bin_width=10, poisson_seed=None, mode='superimpose'):
+    def _generate_kernel(self, n_frames, total_time, mode, seed=None):
+        """
+        Generate a kernel (frame timing sequence) based on the specified mode.
+
+        Parameters
+        ----------
+        n_frames : int
+            Number of frames to generate
+        total_time : float
+            Total time window in milliseconds
+        mode : str
+            Generation mode: 'random', 'equal', or 'blue_noise'
+        seed : int, optional
+            Random seed for reproducibility
+
+        Returns
+        -------
+        numpy.ndarray
+            Array of frame start times in milliseconds
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
+        if mode == 'equal':
+            # Evenly spaced frames
+            if n_frames == 1:
+                kernel = np.array([0.0])
+            else:
+                kernel = np.linspace(0, total_time, n_frames, endpoint=False)
+
+        elif mode == 'random':
+            # Random frame positions
+            kernel = np.sort(np.random.uniform(0, total_time, n_frames))
+            # Ensure first frame starts at 0
+            kernel[0] = 0.0
+
+        elif mode == 'blue_noise':
+            # Blue noise: more evenly distributed than random
+            # Use Mitchell's best-candidate algorithm for blue noise point distribution
+            kernel = np.zeros(n_frames)
+            kernel[0] = 0.0  # First frame at t=0
+
+            for i in range(1, n_frames):
+                # Generate multiple candidates
+                n_candidates = min(20, 10 * i)  # More candidates as we place more points
+                candidates = np.random.uniform(0, total_time, n_candidates)
+
+                # For each candidate, find minimum distance to existing points
+                min_dists = np.zeros(n_candidates)
+                for j, candidate in enumerate(candidates):
+                    dists = np.abs(kernel[:i] - candidate)
+                    min_dists[j] = np.min(dists)
+
+                # Choose candidate with maximum minimum distance (best-candidate)
+                best_idx = np.argmax(min_dists)
+                kernel[i] = candidates[best_idx]
+
+            # Sort the kernel
+            kernel = np.sort(kernel)
+
+        else:
+            raise ValueError(f"Unknown kernel generation mode: {mode}")
+
+        return kernel
+
+    def overlap(self, kernel, total_time=None, freq=None, bin_width=10, poisson_seed=None, mode='superimpose', kernel_seed=None):
         """
         Create overlapping frame structure.
 
@@ -285,17 +350,24 @@ class Data:
 
         Parameters
         ----------
-        kernel : list of float
-            Time sequence for frames in milliseconds.
-            For example, kernel=[0, 12, 10, 25] means:
+        kernel : list of float, or int
+            Time sequence for frames in milliseconds, OR number of frames to generate.
+
+            If list/array: explicit time sequence (e.g., kernel=[0, 12, 10, 25])
             - Frame 1 starts at t=0
             - Frame 2 starts at t=12 ms
             - Frame 3 starts at t=12+10=22 ms
             - Frame 4 starts at t=22+25=47 ms
+
+            If int: number of frames to generate using specified mode
+            - mode='random': generate random frame positions
+            - mode='equal': generate evenly spaced frames
+            - mode='blue_noise': generate blue noise distributed frames (more evenly spaced than random)
         total_time : float, optional
             Total time frame in milliseconds. If None, deduced automatically.
             - For mode='superimpose': ignored, uses input data length
             - For mode='extend': sets the extended time window
+            - For mode='random'/'equal'/'blue_noise': required, sets the time window for frame generation
         freq : float, optional
             Frequency in Hz. If provided, total_time = 1000/freq ms.
             For example, freq=20 Hz means total_time=50 ms.
@@ -311,6 +383,11 @@ class Data:
               reconstruction testing.
             - 'extend': Extends time window and places frames sequentially.
               Legacy mode for backward compatibility.
+            - 'random': Generate random frame positions (requires kernel to be int and total_time to be set)
+            - 'equal': Generate evenly spaced frames (requires kernel to be int and total_time to be set)
+            - 'blue_noise': Generate blue noise distributed frames (requires kernel to be int and total_time to be set)
+        kernel_seed : int, optional
+            Random seed for kernel generation (only used when mode is 'random' or 'blue_noise')
 
         Returns
         -------
@@ -323,6 +400,12 @@ class Data:
         >>> data.overlap(kernel=[0, 12], mode='superimpose')
         >>> # Legacy extended mode:
         >>> data.overlap(kernel=[0, 12, 10, 25], mode='extend')
+        >>> # Random kernel with 5 frames:
+        >>> data.overlap(kernel=5, total_time=50, mode='random', kernel_seed=42)
+        >>> # Evenly spaced 5 frames:
+        >>> data.overlap(kernel=5, total_time=50, mode='equal')
+        >>> # Blue noise 5 frames:
+        >>> data.overlap(kernel=5, total_time=50, mode='blue_noise', kernel_seed=42)
         >>> # With second Poisson to randomize overlapping:
         >>> data.overlap(kernel=[0, 25], poisson_seed=42)
         """
@@ -335,20 +418,33 @@ class Data:
         if source_data is None:
             raise ValueError("No data loaded. Call load_signal_data first.")
 
-        if not isinstance(kernel, (list, tuple, np.ndarray)):
-            raise ValueError("kernel must be a list, tuple, or array")
-
-        kernel = np.array(kernel)
-        if len(kernel) < 1:
-            raise ValueError("kernel must have at least one element")
-        if np.any(kernel < 0):
-            raise ValueError("All elements in kernel must be non-negative")
-
         # Handle freq parameter
         if freq is not None:
             if total_time is not None:
                 raise ValueError("Cannot specify both freq and total_time")
             total_time = 1000.0 / freq  # Convert Hz to ms
+
+        # Generate kernel if integer is provided
+        if isinstance(kernel, int):
+            n_frames = kernel
+            if mode not in ['random', 'equal', 'blue_noise']:
+                raise ValueError(f"When kernel is an integer, mode must be 'random', 'equal', or 'blue_noise', got '{mode}'")
+            if total_time is None:
+                raise ValueError("total_time must be specified when generating kernel from integer")
+
+            kernel = self._generate_kernel(n_frames, total_time, mode, kernel_seed)
+            print(f"Generated {mode} kernel with {n_frames} frames: {kernel}")
+            # After kernel generation, switch to 'extend' mode for actual overlap
+            mode = 'extend'
+        elif not isinstance(kernel, (list, tuple, np.ndarray)):
+            raise ValueError("kernel must be an integer (number of frames), list, tuple, or array")
+        else:
+            kernel = np.array(kernel)
+
+        if len(kernel) < 1:
+            raise ValueError("kernel must have at least one element")
+        if np.any(kernel < 0):
+            raise ValueError("All elements in kernel must be non-negative")
 
         # Save kernel and number of overlapping frames for reconstruction
         self.kernel = kernel.tolist()
