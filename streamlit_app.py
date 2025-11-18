@@ -827,23 +827,101 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
                  "- iron_square_response: Fe_sg225_Iron-gamma with square response"
         )
 
-        st.markdown("**Fitting Options**")
-        col1, col2 = st.columns(2)
-        with col1:
-            vary_background = st.checkbox("Vary Background", value=True,
-                                         help="Allow background to vary during fitting")
-            vary_response = st.checkbox("Vary Response", value=True,
-                                       help="Allow response function to vary during fitting")
-            vary_weights = st.checkbox("Vary Weights", value=True,
-                                      help="Allow material weights to vary during fitting")
-        with col2:
-            vary_sans = st.checkbox("Vary SANS", value=False,
-                                   help="Allow SANS parameters to vary during fitting")
-            vary_extinction = st.checkbox("Vary Extinction", value=False,
-                                         help="Include extinction parameters (only for iron_with_cellulose)")
+        # Vary Parameters in collapsible menu (single column)
+        with st.expander("⚙️ Vary Parameters", expanded=False):
+            st.caption("Control which parameters vary during fitting. Each parameter can be: Not set (None), Fixed (False), or Variable (True)")
 
-        # Advanced parameters
-        with st.expander("Advanced Parameters"):
+            # Background
+            st.markdown("**Background**")
+            enable_vary_background = st.checkbox("Enable vary_background", value=True, key="enable_vary_bg",
+                                                help="Enable control of background parameter")
+            if enable_vary_background:
+                vary_background = st.radio("vary_background", [True, False], index=0, horizontal=True,
+                                          help="True: allow background to vary; False: fix background",
+                                          key="vary_bg_radio")
+            else:
+                vary_background = None
+
+            st.markdown("---")
+
+            # Response
+            st.markdown("**Response**")
+            enable_vary_response = st.checkbox("Enable vary_response", value=True, key="enable_vary_resp",
+                                              help="Enable control of response function parameter")
+            if enable_vary_response:
+                vary_response = st.radio("vary_response", [True, False], index=0, horizontal=True,
+                                        help="True: allow response to vary; False: fix response",
+                                        key="vary_resp_radio")
+            else:
+                vary_response = None
+
+            st.markdown("---")
+
+            # Weights
+            st.markdown("**Weights**")
+            enable_vary_weights = st.checkbox("Enable vary_weights", value=True, key="enable_vary_wts",
+                                             help="Enable control of material weights parameter")
+            if enable_vary_weights:
+                vary_weights = st.radio("vary_weights", [True, False], index=0, horizontal=True,
+                                       help="True: allow weights to vary; False: fix weights",
+                                       key="vary_wts_radio")
+            else:
+                vary_weights = None
+
+            st.markdown("---")
+
+            # SANS
+            st.markdown("**SANS**")
+            enable_vary_sans = st.checkbox("Enable vary_sans", value=False, key="enable_vary_sans",
+                                          help="Enable control of SANS parameter")
+            if enable_vary_sans:
+                vary_sans = st.radio("vary_sans", [True, False], index=0, horizontal=True,
+                                    help="True: allow SANS to vary; False: fix SANS",
+                                    key="vary_sans_radio")
+            else:
+                vary_sans = None
+
+            st.markdown("---")
+
+            # Extinction
+            st.markdown("**Extinction**")
+            enable_vary_extinction = st.checkbox("Enable vary_extinction", value=False, key="enable_vary_ext",
+                                                help="Enable control of extinction parameter (only for iron_with_cellulose)")
+            if enable_vary_extinction:
+                vary_extinction = st.radio("vary_extinction", [True, False], index=0, horizontal=True,
+                                          help="True: include extinction; False: exclude extinction",
+                                          key="vary_ext_radio")
+            else:
+                vary_extinction = None
+
+        # Advanced Fit Parameters
+        with st.expander("🔧 Advanced Fit Parameters", expanded=False):
+            st.markdown("**Wavelength Range**")
+            col_wl1, col_wl2 = st.columns(2)
+            with col_wl1:
+                wlmin = st.number_input(
+                    "λ min (Å)",
+                    min_value=0.1,
+                    max_value=20.0,
+                    value=1.0,
+                    step=0.1,
+                    format="%.1f",
+                    help="Minimum wavelength for fitting range"
+                )
+            with col_wl2:
+                wlmax = st.number_input(
+                    "λ max (Å)",
+                    min_value=0.1,
+                    max_value=20.0,
+                    value=5.0,
+                    step=0.1,
+                    format="%.1f",
+                    help="Maximum wavelength for fitting range"
+                )
+
+            st.markdown("---")
+            st.markdown("**Other Parameters**")
+
             thickness_guess = st.number_input(
                 "Thickness Guess (cm)",
                 min_value=0.1,
@@ -864,6 +942,8 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
         vary_extinction = False
         thickness_guess = 1.95
         norm_fixed = True
+        wlmin = 1.0
+        wlmax = 5.0
 
 # Process button at the bottom (duplicate for convenience)
 st.sidebar.markdown("---")
@@ -948,6 +1028,10 @@ if process_button or process_button_bottom:
 
                     # Prepare nbragg data and clean NaN/Inf values (critical for fitting!)
                     nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
+
+                    # Filter wavelength range for fitting
+                    wavelength_mask = (nbragg_data.table['wl'] >= wlmin) & (nbragg_data.table['wl'] <= wlmax)
+                    nbragg_data.table = nbragg_data.table[wavelength_mask].copy()
 
                     # Remove NaN values
                     nbragg_data.table = nbragg_data.table.dropna()
@@ -1526,7 +1610,16 @@ if st.session_state.workflow_data is not None:
                                             sweep_analysis_kwargs = {k: v for k, v in sweep_analysis_kwargs.items() if v is not None}
 
                                             analysis_sweep = Analysis(xs=nbragg_model, **sweep_analysis_kwargs)
-                                            nbragg_result = analysis_sweep.fit(recon_sweep)
+
+                                            # Convert to nbragg format and filter wavelength range
+                                            nbragg_data_sweep = recon_sweep.to_nbragg(L=9.0, tstep=10e-6)
+                                            wavelength_mask_sweep = (nbragg_data_sweep.table['wl'] >= wlmin) & (nbragg_data_sweep.table['wl'] <= wlmax)
+                                            nbragg_data_sweep.table = nbragg_data_sweep.table[wavelength_mask_sweep].copy()
+
+                                            # Fit using the filtered data
+                                            nbragg_result = analysis_sweep.model.fit(nbragg_data_sweep)
+                                            analysis_sweep.result = nbragg_result
+                                            analysis_sweep.data = nbragg_data_sweep
 
                                             # Extract nbragg parameters
                                             result_dict['nbragg_redchi'] = nbragg_result.redchi
