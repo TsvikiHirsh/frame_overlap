@@ -487,10 +487,10 @@ with st.sidebar.expander("🔊 2. Instrument Response", expanded=False):
             "Pulse Duration (µs)",
             min_value=0.0,
             max_value=5000.0,
-            value=200.0,
+            value=20.0,
             step=10.0,
             format="%.1f",
-            help="Instrument pulse duration in microseconds (0-5000 µs)"
+            help="Instrument pulse duration in microseconds (0-5000 µs). Default: 20 µs baseline"
         )
         bin_width = 10  # Fixed at 10 µs
         st.caption("Bin Width: 10 µs (fixed)")
@@ -799,10 +799,10 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
         nbragg_model = st.selectbox(
             "Material Model",
             ["iron", "iron_with_cellulose", "iron_square_response"],
-            index=0,  # Default to "iron"
+            index=1,  # Default to "iron_with_cellulose"
             help="Select nbragg cross-section model:\n"
-                 "- iron: Fe_sg229_Iron-alpha (recommended)\n"
-                 "- iron_with_cellulose: Fe_sg225_Iron-gamma + cellulose\n"
+                 "- iron: Fe_sg229_Iron-alpha\n"
+                 "- iron_with_cellulose: Fe_sg225_Iron-gamma + cellulose (recommended)\n"
                  "- iron_square_response: Fe_sg225_Iron-gamma with square response"
         )
 
@@ -833,7 +833,7 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
             # Background
             vary_background = tristate_radio(
                 "vary_background",
-                default_index=1,  # Default to True
+                default_index=2,  # Default to False (fixed)
                 key="vary_bg_tristate",
                 help_text="Control background parameter: None (use nbragg default), True (vary), False (fix)"
             )
@@ -841,7 +841,7 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
             # Response
             vary_response = tristate_radio(
                 "vary_response",
-                default_index=1,  # Default to True
+                default_index=2,  # Default to False (fixed)
                 key="vary_resp_tristate",
                 help_text="Control response parameter: None (use nbragg default), True (vary), False (fix)"
             )
@@ -849,7 +849,7 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
             # Weights
             vary_weights = tristate_radio(
                 "vary_weights",
-                default_index=1,  # Default to True
+                default_index=1,  # Default to True (vary)
                 key="vary_wts_tristate",
                 help_text="Control weights parameter: None (use nbragg default), True (vary), False (fix)"
             )
