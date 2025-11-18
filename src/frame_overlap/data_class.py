@@ -80,8 +80,32 @@ class Data:
     """
 
     def __init__(self, signal_file=None, openbeam_file=None, flux=None,
-                 duration=None, threshold=None, max_stack=2400, freq=None):
-        """Initialize Data object and load data files if provided."""
+                 duration=None, threshold=None, max_stack=2400, freq=None,
+                 tof_min=None, tof_max=None):
+        """
+        Initialize Data object and load data files if provided.
+
+        Parameters
+        ----------
+        signal_file : str, optional
+            Path to signal CSV file
+        openbeam_file : str, optional
+            Path to openbeam CSV file
+        flux : float, optional
+            Neutron flux in n/cm²/s
+        duration : float, optional
+            Measurement duration in hours
+        threshold : float, optional
+            Minimum stack value to filter data
+        max_stack : int, optional
+            Maximum stack value (default 2400)
+        freq : float, optional
+            Source frequency in Hz
+        tof_min : float, optional
+            Minimum time-of-flight in µs for filtering data
+        tof_max : float, optional
+            Maximum time-of-flight in µs for filtering data
+        """
         self.signal_file = signal_file
         self.openbeam_file = openbeam_file
         self.flux = flux  # n/cm²/s (for continuous source)
@@ -90,6 +114,8 @@ class Data:
         self.threshold = threshold
         self.max_stack = max_stack
         self.pulse_duration = None  # µs - set by convolute_response()
+        self.tof_min = tof_min  # µs - minimum TOF for filtering
+        self.tof_max = tof_max  # µs - maximum TOF for filtering
 
         # Initialize data storage for signal at each stage
         self.data = None  # Original
@@ -154,6 +180,13 @@ class Data:
         # Convert stack to time in µs (each stack is 10 µs)
         df['time'] = (df['stack'] - 1) * 10
 
+        # Apply TOF filtering if tof_min or tof_max specified
+        if self.tof_min is not None or self.tof_max is not None:
+            tof_min = self.tof_min if self.tof_min is not None else df['time'].min()
+            tof_max = self.tof_max if self.tof_max is not None else df['time'].max()
+            mask = (df['time'] >= tof_min) & (df['time'] <= tof_max)
+            df = df[mask].copy()
+
         if np.any(df['err'] <= 0):
             raise ValueError("Errors must be positive")
         if df[['time', 'counts', 'err']].isnull().any().any():
@@ -194,6 +227,13 @@ class Data:
         # Convert to time and validate
         # Convert stack to time in µs (each stack is 10 µs)
         df['time'] = (df['stack'] - 1) * 10
+
+        # Apply TOF filtering if tof_min or tof_max specified
+        if self.tof_min is not None or self.tof_max is not None:
+            tof_min = self.tof_min if self.tof_min is not None else df['time'].min()
+            tof_max = self.tof_max if self.tof_max is not None else df['time'].max()
+            mask = (df['time'] >= tof_min) & (df['time'] <= tof_max)
+            df = df[mask].copy()
 
         if np.any(df['err'] <= 0):
             raise ValueError("Errors must be positive")

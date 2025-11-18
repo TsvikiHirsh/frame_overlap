@@ -944,22 +944,12 @@ process_button_bottom = st.sidebar.button("🚀 Run Pipeline", type="primary", u
 if process_button or process_button_bottom:
     with st.spinner("Processing pipeline..."):
         try:
-            # Create workflow
+            # Create workflow with TOF filtering built-in
             data = Data(signal_path, openbeam_path,
-                       flux=flux_orig, duration=duration_orig, freq=freq_orig)
+                       flux=flux_orig, duration=duration_orig, freq=freq_orig,
+                       tof_min=tof_min_us, tof_max=tof_max_us)
 
-            # Apply wavelength filtering (by filtering time range)
-            if data.data is not None and data.op_data is not None:
-                # Filter signal data
-                mask_signal = (data.data['time'] >= tof_min_us) & (data.data['time'] <= tof_max_us)
-                data.data = data.data[mask_signal].copy()
-                data.table = data.data  # Update legacy reference
-
-                # Filter openbeam data
-                mask_openbeam = (data.op_data['time'] >= tof_min_us) & (data.op_data['time'] <= tof_max_us)
-                data.op_data = data.op_data[mask_openbeam].copy()
-                data.openbeam_table = data.op_data  # Update legacy reference
-
+            if data.data is not None:
                 st.sidebar.success(f"✓ Wavelength filtered: {lambda_min:.1f}-{lambda_max:.1f} Å")
 
             # Apply stages
