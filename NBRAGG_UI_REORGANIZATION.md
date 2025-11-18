@@ -44,22 +44,21 @@ Reorganized the nbragg fit controls in the Streamlit app to provide better organ
 - Thickness Guess (cm): Moved here from previous location
 - Fix Normalization to 1.0: Moved here from previous location
 
-### 3. Wavelength Filtering Applied to nbragg Fits
+### 3. Wavelength Range Parameters Passed to nbragg
 
 **Main pipeline fitting:**
 ```python
-# Filter wavelength range for fitting
-wavelength_mask = (nbragg_data.table['wl'] >= wlmin) & (nbragg_data.table['wl'] <= wlmax)
-nbragg_data.table = nbragg_data.table[wavelength_mask].copy()
+# Fit using the cleaned data with wavelength range
+result = analysis.model.fit(nbragg_data, wlmin=wlmin, wlmax=wlmax)
 ```
 
 **GroupBy parameter sweep:**
 ```python
-# Convert to nbragg format and filter wavelength range
-nbragg_data_sweep = recon_sweep.to_nbragg(L=9.0, tstep=10e-6)
-wavelength_mask_sweep = (nbragg_data_sweep.table['wl'] >= wlmin) & (nbragg_data_sweep.table['wl'] <= wlmax)
-nbragg_data_sweep.table = nbragg_data_sweep.table[wavelength_mask_sweep].copy()
+# Fit using wavelength range parameters
+nbragg_result = analysis_sweep.model.fit(nbragg_data_sweep, wlmin=wlmin, wlmax=wlmax)
 ```
+
+The nbragg model.fit() method handles wavelength filtering internally when wlmin and wlmax parameters are provided.
 
 ---
 
@@ -255,8 +254,8 @@ analysis_kwargs = {k: v for k, v in analysis_kwargs.items() if v is not None}
   - Lines 830-935: New vary parameter UI (tri-state, single column, collapsible)
   - Lines 897-935: New advanced fit parameters section with wavelength range
   - Lines 936-946: Updated else block with wlmin/wlmax defaults
-  - Lines 1032-1034: Apply wavelength filtering to main pipeline nbragg fit
-  - Lines 1614-1622: Apply wavelength filtering to GroupBy sweep nbragg fits
+  - Line 1043: Pass wlmin/wlmax to model.fit() in main pipeline
+  - Line 1614: Pass wlmin/wlmax to model.fit() in GroupBy sweep
 
 ---
 
@@ -295,10 +294,10 @@ The new tri-state UI correctly implements this semantic distinction.
 
 ### Wavelength Range
 
-The wavelength filter is applied to the nbragg data table **after** conversion from time-of-flight. This ensures:
-- Filtering happens in wavelength space (more intuitive for Bragg edge analysis)
-- Data cleaning (NaN, inf removal) still processes full dataset first
-- Filter applies before fitting, reducing computational cost for narrow ranges
+The wavelength range (wlmin, wlmax) is passed directly to the nbragg model.fit() method. This ensures:
+- Filtering is handled by nbragg internally (consistent with nbragg's design)
+- No need to manually filter the data table
+- Simpler and more robust implementation
 
 ### Performance
 

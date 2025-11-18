@@ -632,12 +632,16 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
                 n_frames = 2
                 total_time = 50
 
+            # Set dummy values for auto-gen parameters (not used in manual mode)
+            kernel_gen_mode = None
+            kernel_seed = None
+
         else:  # Auto-generate mode
             # Spacing type
             spacing_type = st.radio(
                 "Spacing Type",
-                ["Equal", "Random"],
-                help="Equal spacing or random spacing between frames"
+                ["Equal", "Random", "Blue Noise"],
+                help="Equal spacing, random spacing, or blue noise (more uniform than random)"
             )
 
             # Number of frames
@@ -649,48 +653,22 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
                 help="Number of overlapping frames"
             )
 
-            # Generate kernel based on spacing type
-            if spacing_type == "Equal":
-                # Equally spaced frames - time differences
-                if n_frames > 1:
-                    spacing = max_frame_time / n_frames
-                    kernel = [0.0] + [round(spacing, 2)] * (n_frames - 1)
+            # Kernel generation seed
+            if spacing_type in ["Random", "Blue Noise"]:
+                use_kernel_seed = st.checkbox("Use seed for reproducibility", value=True)
+                if use_kernel_seed:
+                    kernel_seed = st.number_input("Kernel seed", min_value=1, value=42, step=1)
                 else:
-                    kernel = [0.0]
-            else:  # Random
-                # Randomly spaced frames with seed for reproducibility
-                seed_kernel = seed_poisson if seed_poisson is not None else 42
-                np.random.seed(seed_kernel)
-                if n_frames > 1:
-                    # Generate random time differences that sum to max_frame_time
-                    # Use Dirichlet distribution for random partitioning
-                    random_fractions = np.random.dirichlet([1] * n_frames)
-                    time_differences = random_fractions * max_frame_time
-                    # First frame always at 0
-                    kernel = [0.0] + [round(diff, 1) for diff in time_differences[1:]]
-                else:
-                    kernel = [0.0]
+                    kernel_seed = None
+            else:
+                kernel_seed = None
 
-            # Display generated kernel in editable field
-            kernel_str_generated = ','.join([str(k) for k in kernel])
-            kernel_str_edited = st.text_input(
-                "Generated Kernel Time Differences (editable, ms)",
-                value=kernel_str_generated,
-                help="Auto-generated time differences - you can edit if needed"
-            )
+            # Store kernel generation parameters for use in pipeline
+            kernel_gen_mode = spacing_type.lower().replace(" ", "_")
+            kernel = n_frames  # Pass integer for auto-generation
+            total_time = max_frame_time
 
-            # Parse edited kernel
-            try:
-                kernel = [float(x.strip()) for x in kernel_str_edited.split(',')]
-                n_frames = len(kernel)
-            except ValueError:
-                st.error("Invalid kernel format. Using auto-generated values.")
-
-            # Convert differences to absolute times for overlap() function
-            kernel_absolute = [sum(kernel[:i+1]) for i in range(len(kernel))]
-            total_time = kernel_absolute[-1] + 20 if kernel_absolute else 50
-
-            st.info(f"📊 Time differences: {kernel} ms → Frames at: {[round(t, 1) for t in kernel_absolute]} ms")
+            st.info(f"📊 Will generate {n_frames} frames with {spacing_type} spacing in {total_time:.1f} ms window")
     else:
         kernel = None
         kernel_absolute = None
@@ -829,70 +807,67 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
 
         # Vary Parameters in collapsible menu (single column)
         with st.expander("⚙️ Vary Parameters", expanded=False):
-            st.caption("Control which parameters vary during fitting. Each parameter can be: Not set (None), Fixed (False), or Variable (True)")
+            st.caption("Select parameter state: None (not set), True (vary), or False (fixed)")
+
+            # Helper function to create tri-state radio
+            def tristate_radio(label, default_index, key, help_text):
+                """Create a tri-state radio button that can be None, True, or False"""
+                options = ["None (not set)", "True (vary)", "False (fixed)"]
+                selection = st.radio(
+                    label,
+                    options=options,
+                    index=default_index,
+                    horizontal=True,
+                    key=key,
+                    help=help_text
+                )
+                # Map selection to actual value
+                if "None" in selection:
+                    return None
+                elif "True" in selection:
+                    return True
+                else:  # "False" in selection
+                    return False
 
             # Background
-            st.markdown("**Background**")
-            enable_vary_background = st.checkbox("Enable vary_background", value=True, key="enable_vary_bg",
-                                                help="Enable control of background parameter")
-            if enable_vary_background:
-                vary_background = st.radio("vary_background", [True, False], index=0, horizontal=True,
-                                          help="True: allow background to vary; False: fix background",
-                                          key="vary_bg_radio")
-            else:
-                vary_background = None
-
-            st.markdown("---")
+            vary_background = tristate_radio(
+                "vary_background",
+                default_index=1,  # Default to True
+                key="vary_bg_tristate",
+                help_text="Control background parameter: None (use nbragg default), True (vary), False (fix)"
+            )
 
             # Response
-            st.markdown("**Response**")
-            enable_vary_response = st.checkbox("Enable vary_response", value=True, key="enable_vary_resp",
-                                              help="Enable control of response function parameter")
-            if enable_vary_response:
-                vary_response = st.radio("vary_response", [True, False], index=0, horizontal=True,
-                                        help="True: allow response to vary; False: fix response",
-                                        key="vary_resp_radio")
-            else:
-                vary_response = None
-
-            st.markdown("---")
+            vary_response = tristate_radio(
+                "vary_response",
+                default_index=1,  # Default to True
+                key="vary_resp_tristate",
+                help_text="Control response parameter: None (use nbragg default), True (vary), False (fix)"
+            )
 
             # Weights
-            st.markdown("**Weights**")
-            enable_vary_weights = st.checkbox("Enable vary_weights", value=True, key="enable_vary_wts",
-                                             help="Enable control of material weights parameter")
-            if enable_vary_weights:
-                vary_weights = st.radio("vary_weights", [True, False], index=0, horizontal=True,
-                                       help="True: allow weights to vary; False: fix weights",
-                                       key="vary_wts_radio")
-            else:
-                vary_weights = None
-
-            st.markdown("---")
+            vary_weights = tristate_radio(
+                "vary_weights",
+                default_index=1,  # Default to True
+                key="vary_wts_tristate",
+                help_text="Control weights parameter: None (use nbragg default), True (vary), False (fix)"
+            )
 
             # SANS
-            st.markdown("**SANS**")
-            enable_vary_sans = st.checkbox("Enable vary_sans", value=False, key="enable_vary_sans",
-                                          help="Enable control of SANS parameter")
-            if enable_vary_sans:
-                vary_sans = st.radio("vary_sans", [True, False], index=0, horizontal=True,
-                                    help="True: allow SANS to vary; False: fix SANS",
-                                    key="vary_sans_radio")
-            else:
-                vary_sans = None
-
-            st.markdown("---")
+            vary_sans = tristate_radio(
+                "vary_sans",
+                default_index=0,  # Default to None
+                key="vary_sans_tristate",
+                help_text="Control SANS parameter: None (use nbragg default), True (vary), False (fix)"
+            )
 
             # Extinction
-            st.markdown("**Extinction**")
-            enable_vary_extinction = st.checkbox("Enable vary_extinction", value=False, key="enable_vary_ext",
-                                                help="Enable control of extinction parameter (only for iron_with_cellulose)")
-            if enable_vary_extinction:
-                vary_extinction = st.radio("vary_extinction", [True, False], index=0, horizontal=True,
-                                          help="True: include extinction; False: exclude extinction",
-                                          key="vary_ext_radio")
-            else:
-                vary_extinction = None
+            vary_extinction = tristate_radio(
+                "vary_extinction",
+                default_index=0,  # Default to None
+                key="vary_ext_tristate",
+                help_text="Control extinction parameter: None (use nbragg default), True (vary), False (fix)"
+            )
 
         # Advanced Fit Parameters
         with st.expander("🔧 Advanced Fit Parameters", expanded=False):
@@ -982,7 +957,11 @@ if process_button or process_button_bottom:
                 st.sidebar.success(f"✓ Poisson (flux: {flux_new:.1e})")
 
             if apply_overlap:
-                data.overlap(kernel=kernel_absolute, total_time=total_time)
+                # Handle both manual kernel and auto-generated kernel
+                if kernel_mode == "Manual":
+                    data.overlap(kernel=kernel_absolute, total_time=total_time)
+                else:  # Auto-generate
+                    data.overlap(kernel=kernel, total_time=total_time, mode=kernel_gen_mode, kernel_seed=kernel_seed)
                 st.sidebar.success(f"✓ Overlap ({n_frames} frames)")
 
             st.session_state.workflow_data = data
@@ -1029,10 +1008,6 @@ if process_button or process_button_bottom:
                     # Prepare nbragg data and clean NaN/Inf values (critical for fitting!)
                     nbragg_data = recon.to_nbragg(L=9.0, tstep=10e-6)
 
-                    # Filter wavelength range for fitting
-                    wavelength_mask = (nbragg_data.table['wl'] >= wlmin) & (nbragg_data.table['wl'] <= wlmax)
-                    nbragg_data.table = nbragg_data.table[wavelength_mask].copy()
-
                     # Remove NaN values
                     nbragg_data.table = nbragg_data.table.dropna()
 
@@ -1043,8 +1018,8 @@ if process_button or process_button_bottom:
                     # Remove zero or negative errors
                     nbragg_data.table = nbragg_data.table[nbragg_data.table['err'] > 0]
 
-                    # Fit using the cleaned data directly with the model
-                    result = analysis.model.fit(nbragg_data)
+                    # Fit using the cleaned data with wavelength range
+                    result = analysis.model.fit(nbragg_data, wlmin=wlmin, wlmax=wlmax)
                     analysis.result = result
                     analysis.data = nbragg_data
 
@@ -1611,13 +1586,11 @@ if st.session_state.workflow_data is not None:
 
                                             analysis_sweep = Analysis(xs=nbragg_model, **sweep_analysis_kwargs)
 
-                                            # Convert to nbragg format and filter wavelength range
+                                            # Convert to nbragg format
                                             nbragg_data_sweep = recon_sweep.to_nbragg(L=9.0, tstep=10e-6)
-                                            wavelength_mask_sweep = (nbragg_data_sweep.table['wl'] >= wlmin) & (nbragg_data_sweep.table['wl'] <= wlmax)
-                                            nbragg_data_sweep.table = nbragg_data_sweep.table[wavelength_mask_sweep].copy()
 
-                                            # Fit using the filtered data
-                                            nbragg_result = analysis_sweep.model.fit(nbragg_data_sweep)
+                                            # Fit using wavelength range parameters
+                                            nbragg_result = analysis_sweep.model.fit(nbragg_data_sweep, wlmin=wlmin, wlmax=wlmax)
                                             analysis_sweep.result = nbragg_result
                                             analysis_sweep.data = nbragg_data_sweep
 
