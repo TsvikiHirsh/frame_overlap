@@ -798,11 +798,12 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
         st.markdown("**nbragg Model Selection**")
         nbragg_model = st.selectbox(
             "Material Model",
-            ["iron", "iron_with_cellulose", "iron_square_response"],
+            ["iron", "iron_with_cellulose", "iron_cellulose_fixed_response", "iron_square_response"],
             index=1,  # Default to "iron_with_cellulose"
             help="Select nbragg cross-section model:\n"
                  "- iron: Fe_sg229_Iron-alpha\n"
-                 "- iron_with_cellulose: Fe_sg225_Iron-gamma + cellulose (recommended)\n"
+                 "- iron_with_cellulose: Fe_sg229_Iron-alpha + cellulose (recommended)\n"
+                 "- iron_cellulose_fixed_response: Iron + cellulose with fixed squared_jorgensen response\n"
                  "- iron_square_response: Fe_sg225_Iron-gamma with square response"
         )
 
@@ -1013,6 +1014,7 @@ if process_button or process_button_bottom:
                         'vary_sans': vary_sans,
                         'vary_extinction': vary_extinction,
                         'response_kind': response_kind,
+                        'pulse_duration': pulse_duration if apply_convolution else None,
                         'thickness_guess': thickness_guess,
                         'norm_guess': 1.0 if norm_fixed else None
                     }
@@ -1596,6 +1598,7 @@ if st.session_state.workflow_data is not None:
                                                 'vary_sans': vary_sans,
                                                 'vary_extinction': vary_extinction,
                                                 'response_kind': response_kind,
+                                                'pulse_duration': pulse_duration if apply_convolution else None,
                                                 'thickness_guess': thickness_guess,
                                                 'norm_guess': 1.0 if norm_fixed else None
                                             }

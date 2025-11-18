@@ -71,7 +71,8 @@ class Analysis:
     """
 
     def __init__(self, xs='iron', vary_weights=False, vary_background=True,
-                 vary_sans=False, vary_extinction=False, response_kind=None, **kwargs):
+                 vary_sans=False, vary_extinction=False, response_kind=None,
+                 pulse_duration=None, **kwargs):
         """
         Initialize Analysis with cross-section specification.
 
@@ -82,6 +83,7 @@ class Analysis:
             - 'iron': Simple Fe_sg229_Iron-alpha (use with vary_background=True, vary_response=True)
             - 'iron_square_response': Iron with square response
             - 'iron_with_cellulose': Iron with cellulose background (2% cellulose, 98% Fe_alpha)
+            - 'iron_cellulose_fixed_response': Iron with cellulose, squared_jorgensen response fixed to pulse_duration
         vary_weights : bool
             Whether to vary material weights. Default is False.
         vary_background : bool
@@ -97,6 +99,9 @@ class Analysis:
             - 'full_jorgensen': Full Jorgensen response
             - 'squared_jorgensen': Squared Jorgensen response
             Default is None (uses nbragg default).
+        pulse_duration : float, optional
+            Pulse duration in microseconds. Used for 'iron_cellulose_fixed_response' model
+            to set the fixed response width. Default is None.
         **kwargs
             Additional arguments for nbragg.TransmissionModel, including:
             - vary_response: Whether to vary response function (e.g., for 'iron' model)
@@ -117,6 +122,7 @@ class Analysis:
         self.vary_sans = vary_sans
         self.vary_extinction = vary_extinction
         self.response_kind = response_kind
+        self.pulse_duration = pulse_duration
         self.kwargs = kwargs
         self.result = None
         self.data = None  # Will store nbragg.Data after fit()
@@ -178,6 +184,16 @@ class Analysis:
                     self.model.params[param_name].value = norm_guess
                     self.model.params[param_name].vary = False
 
+        # For iron_cellulose_fixed_response, set response width to pulse_duration and fix it
+        if isinstance(xs, str) and xs == 'iron_cellulose_fixed_response':
+            if hasattr(self.model, 'params'):
+                # Look for response width parameters (e.g., 'width', 'sigma', etc.)
+                for param_name in self.model.params:
+                    if 'width' in param_name.lower() or 'sigma' in param_name.lower():
+                        self.model.params[param_name].value = self.pulse_duration
+                        self.model.params[param_name].vary = False
+                        break
+
         # Set parameter variations
         if vary_weights and hasattr(self.model, 'set_vary_weights'):
             self.model.set_vary_weights(True)
@@ -186,6 +202,8 @@ class Analysis:
         """Setup predefined cross-section configurations."""
         if name == 'iron_with_cellulose':
             return self._iron_with_cellulose()
+        elif name == 'iron_cellulose_fixed_response':
+            return self._iron_cellulose_fixed_response()
         elif name == 'iron_square_response':
             return self._iron_square_response()
         elif name == 'iron':
@@ -193,7 +211,7 @@ class Analysis:
         else:
             raise ValueError(
                 f"Unknown predefined cross-section '{name}'. "
-                f"Choose from: 'iron_with_cellulose', 'iron_square_response', 'iron'"
+                f"Choose from: 'iron_with_cellulose', 'iron_cellulose_fixed_response', 'iron_square_response', 'iron'"
             )
 
     def _iron_with_cellulose(self):
@@ -245,6 +263,70 @@ class Analysis:
         except Exception as e:
             raise ValueError(
                 f"Failed to create iron_with_cellulose cross-section: {e}. "
+                f"Make sure cellulose ncmat is in notebooks/ folder."
+            )
+
+    def _iron_cellulose_fixed_response(self):
+        """
+        Create iron with cellulose cross-section with fixed squared_jorgensen response.
+
+        This model:
+        - Uses iron_with_cellulose composition (2% cellulose, 98% Fe_alpha)
+        - Sets response_kind='squared_jorgensen'
+        - Fixes vary_response=False
+        - Sets response width to pulse_duration (if provided)
+
+        Requires pulse_duration to be set during initialization.
+        """
+        import os
+        from pathlib import Path
+
+        if self.pulse_duration is None:
+            raise ValueError(
+                "pulse_duration must be provided when using 'iron_cellulose_fixed_response' model. "
+                "Pass pulse_duration=<value_in_microseconds> to Analysis()"
+            )
+
+        try:
+            # Register cellulose material if not already available
+            cellulose_ncmat = Path("notebooks/Cellulose_C6O5H10.ncmat")
+            if cellulose_ncmat.exists():
+                self.nbragg.register_material(str(cellulose_ncmat))
+
+            # Use Fe_sg229_Iron-alpha
+            iron = "Fe_sg229_Iron-alpha.ncmat"
+            cellulose = str(cellulose_ncmat) if cellulose_ncmat.exists() else "Cellulose_C6O5H10.ncmat"
+
+            # Create base materials dict with 2% cellulose, 98% iron
+            iron_mat = {'mat': iron, 'weight': 0.98}
+            cellulose_mat = {'mat': cellulose, 'weight': 0.02}
+
+            # Add extinction parameters to iron if requested
+            if self.vary_extinction:
+                iron_mat['ext_method'] = 'Uncorr_Sabine'
+                iron_mat['ext_dist'] = 'tri'
+                iron_mat['ext_L'] = 100000  # µm
+                iron_mat['ext_l'] = 100     # µm
+                iron_mat['ext_g'] = 100     # µm
+
+            # Override response_kind to squared_jorgensen for this model
+            if 'response_kind' not in self.kwargs:
+                self.kwargs['response_kind'] = 'squared_jorgensen'
+
+            # Set vary_response to False for this model
+            if 'vary_response' not in self.kwargs:
+                self.kwargs['vary_response'] = False
+
+            return self.nbragg.CrossSection(
+                materials={
+                    'iron': iron_mat,
+                    'cellulose': cellulose_mat
+                }
+            )
+
+        except Exception as e:
+            raise ValueError(
+                f"Failed to create iron_cellulose_fixed_response cross-section: {e}. "
                 f"Make sure cellulose ncmat is in notebooks/ folder."
             )
 
