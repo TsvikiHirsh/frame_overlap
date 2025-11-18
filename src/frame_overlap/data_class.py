@@ -663,30 +663,29 @@ class Data:
                 # - pulse_duration_ratio: relative to 10 µs baseline (20 µs = 2x more neutrons than 10 µs)
                 baseline_duration = 10.0  # µs - reference pulse duration
                 flux_ratio = flux / self.flux
-                time_ratio = measurement_time / self.duration  # measurement_time in minutes, duration in hours
-                # Convert time_ratio to correct units: duration is in hours, measurement_time is in minutes
-                time_ratio = (measurement_time / 60) / self.duration  # Convert measurement_time to hours first
+                # Both duration and measurement_time are in hours
+                time_ratio = measurement_time / self.duration
                 pulse_duration_ratio = self.pulse_duration / baseline_duration
                 duty_cycle = flux_ratio * time_ratio * freq * pulse_duration_ratio * (baseline_duration / 1e6)
 
                 print(f"Pulse duration scaling applied: {self.pulse_duration} µs (baseline: {baseline_duration} µs)")
                 print(f"Duty cycle calculation for PULSED source:")
                 print(f"  duty_cycle = (flux_new / flux_orig) × (time_new / time_orig) × freq_new × (pulse_duration / baseline_duration) × (baseline_duration / 1e6)")
-                print(f"  duty_cycle = ({flux:.2e} / {self.flux:.2e}) × ({measurement_time/60:.2f}h / {self.duration:.2f}h) × {freq} × ({self.pulse_duration} / {baseline_duration}) × ({baseline_duration}e-6)")
+                print(f"  duty_cycle = ({flux:.2e} / {self.flux:.2e}) × ({measurement_time:.2f}h / {self.duration:.2f}h) × {freq} × ({self.pulse_duration} / {baseline_duration}) × ({baseline_duration}e-6)")
                 print(f"  duty_cycle = {flux_ratio:.4f} × {time_ratio:.4f} × {freq} × {pulse_duration_ratio:.2f} × {baseline_duration/1e6:.6f}")
                 print(f"  duty_cycle = {duty_cycle:.6f}")
             else:
                 # For CONTINUOUS source without pulsing: include time ratio
                 flux_ratio = flux / self.flux
-                # Convert time_ratio to correct units: duration is in hours, measurement_time is in minutes
-                time_ratio = (measurement_time / 60) / self.duration  # Convert measurement_time to hours first
+                # Both duration and measurement_time are in hours
+                time_ratio = measurement_time / self.duration
                 duty_cycle = flux_ratio * time_ratio
 
                 print("Warning: No pulse_duration set. Using CONTINUOUS source formula.")
                 print("  Consider calling convolute_response() before poisson_sample()")
                 print(f"Duty cycle calculation for CONTINUOUS source:")
                 print(f"  duty_cycle = (flux_new / flux_orig) × (time_new / time_orig)")
-                print(f"  duty_cycle = ({flux:.2e} / {self.flux:.2e}) × ({measurement_time/60:.2f}h / {self.duration:.2f}h)")
+                print(f"  duty_cycle = ({flux:.2e} / {self.flux:.2e}) × ({measurement_time:.2f}h / {self.duration:.2f}h)")
                 print(f"  duty_cycle = {flux_ratio:.4f} × {time_ratio:.4f}")
                 print(f"  duty_cycle = {duty_cycle:.4f}")
 

@@ -557,8 +557,8 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
             format="%.1f",
             help="New measurement duration in hours (0.5-240 hours)"
         )
-        # Convert hours to minutes for internal use
-        measurement_time = measurement_time_hours * 60
+        # Use hours directly (poisson_sample expects hours)
+        measurement_time = measurement_time_hours
 
         seed_poisson = st.number_input(
             "Random Seed",
