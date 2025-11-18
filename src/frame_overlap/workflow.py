@@ -397,7 +397,27 @@ class Workflow:
 
                 # Apply overlap if it was done
                 if hasattr(self.data, 'kernel') and self.data.kernel is not None:
-                    data.overlap(kernel=self.data.kernel)
+                    # Convert kernel to appropriate type
+                    kernel = self.data.kernel
+                    if isinstance(kernel, (list, tuple, np.ndarray)):
+                        kernel = list(kernel)  # Ensure it's a list
+                    elif not isinstance(kernel, (int, float)):
+                        # If it's something else (e.g., numpy scalar), convert to int/float
+                        try:
+                            kernel = int(kernel)
+                        except (ValueError, TypeError):
+                            kernel = list(kernel)
+
+                    # Pass additional overlap parameters if available
+                    overlap_kwargs = {'kernel': kernel}
+                    if hasattr(self.data, 'overlap_mode'):
+                        overlap_kwargs['mode'] = self.data.overlap_mode
+                    if hasattr(self.data, 'overlap_total_time'):
+                        overlap_kwargs['total_time'] = self.data.overlap_total_time
+                    if hasattr(self.data, 'overlap_kernel_seed'):
+                        overlap_kwargs['kernel_seed'] = self.data.overlap_kernel_seed
+
+                    data.overlap(**overlap_kwargs)
 
                 # Reconstruct with sweep parameter if applicable
                 recon_params = self._recon_params.copy()

@@ -450,6 +450,11 @@ class Data:
         self.kernel = kernel.tolist()
         self.n_overlapping_frames = len(kernel)
 
+        # Store overlap parameters for workflow sweep compatibility
+        self.overlap_mode = mode
+        self.overlap_total_time = total_time
+        self.overlap_kernel_seed = kernel_seed
+
         # Apply overlap to signal
         self.overlapped_data = self._create_overlap(source_data, kernel, total_time, bin_width, mode)
         self.table = self.overlapped_data

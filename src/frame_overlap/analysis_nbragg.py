@@ -71,7 +71,7 @@ class Analysis:
     """
 
     def __init__(self, xs='iron', vary_weights=False, vary_background=True,
-                 vary_sans=False, vary_extinction=False, **kwargs):
+                 vary_sans=False, vary_extinction=False, response_kind=None, **kwargs):
         """
         Initialize Analysis with cross-section specification.
 
@@ -90,6 +90,13 @@ class Analysis:
             Whether to vary SANS parameters. Default is False.
         vary_extinction : bool
             Whether to include extinction parameters. Default is False.
+        response_kind : str, optional
+            Type of response function to use. Options:
+            - 'jorgensen': Standard Jorgensen response (default)
+            - 'squared': Squared response
+            - 'full_jorgensen': Full Jorgensen response
+            - 'squared_jorgensen': Squared Jorgensen response
+            Default is None (uses nbragg default).
         **kwargs
             Additional arguments for nbragg.TransmissionModel, including:
             - vary_response: Whether to vary response function (e.g., for 'iron' model)
@@ -109,6 +116,7 @@ class Analysis:
         self.vary_background = vary_background
         self.vary_sans = vary_sans
         self.vary_extinction = vary_extinction
+        self.response_kind = response_kind
         self.kwargs = kwargs
         self.result = None
         self.data = None  # Will store nbragg.Data after fit()
@@ -149,6 +157,10 @@ class Analysis:
         # Add vary_extinction if specified (not None)
         if vary_extinction is not None:
             model_kwargs['vary_extinction'] = vary_extinction
+
+        # Add response_kind if specified (not None)
+        if response_kind is not None:
+            model_kwargs['response_kind'] = response_kind
 
         self.model = nbragg.TransmissionModel(
             self.xs,

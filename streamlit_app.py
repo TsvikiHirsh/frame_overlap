@@ -870,6 +870,19 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
                 help_text="Control extinction parameter: None (use nbragg default), True (vary), False (fix)"
             )
 
+            # Response Kind
+            st.markdown("**Response Function Type**")
+            response_kind_options = ["Default", "jorgensen", "squared", "full_jorgensen", "squared_jorgensen"]
+            response_kind_idx = st.selectbox(
+                "response_kind",
+                options=range(len(response_kind_options)),
+                format_func=lambda x: response_kind_options[x],
+                index=0,
+                key="response_kind_select",
+                help="Type of response function to use in nbragg fitting"
+            )
+            response_kind = None if response_kind_idx == 0 else response_kind_options[response_kind_idx]
+
         # Advanced Fit Parameters
         with st.expander("🔧 Advanced Fit Parameters", expanded=False):
             st.markdown("**Wavelength Range**")
@@ -916,6 +929,7 @@ with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
         vary_weights = True
         vary_sans = False
         vary_extinction = False
+        response_kind = None
         thickness_guess = 1.95
         norm_fixed = True
         wlmin = 1.0
@@ -998,6 +1012,7 @@ if process_button or process_button_bottom:
                         'vary_weights': vary_weights,
                         'vary_sans': vary_sans,
                         'vary_extinction': vary_extinction,
+                        'response_kind': response_kind,
                         'thickness_guess': thickness_guess,
                         'norm_guess': 1.0 if norm_fixed else None
                     }
@@ -1580,6 +1595,7 @@ if st.session_state.workflow_data is not None:
                                                 'vary_weights': vary_weights,
                                                 'vary_sans': vary_sans,
                                                 'vary_extinction': vary_extinction,
+                                                'response_kind': response_kind,
                                                 'thickness_guess': thickness_guess,
                                                 'norm_guess': 1.0 if norm_fixed else None
                                             }
