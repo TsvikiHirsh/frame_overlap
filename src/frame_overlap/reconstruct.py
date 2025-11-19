@@ -169,11 +169,23 @@ class Reconstruct:
         # Clip to small positive epsilon to avoid log(0)=NaN in nbragg fitting
         epsilon = 1e-10
 
+        # Prepare data for nbragg: keep time column but rename to 'tof' (time-of-flight)
+        # IMPORTANT: Must preserve the actual time values (especially if tof_min was used)
+        # so that wavelength conversion is correct
+        # NOTE: reconstructed_data has time in microseconds already (from data.table)
+        signal_df = self.reconstructed_data.reset_index()
+        signal_df = signal_df.rename(columns={'time': 'tof'})
+        signal_df[['counts', 'err']] = signal_df[['counts', 'err']].clip(lower=epsilon)
+
+        openbeam_df = self.reconstructed_openbeam.reset_index()
+        openbeam_df = openbeam_df.rename(columns={'time': 'tof'})
+        openbeam_df[['counts', 'err']] = openbeam_df[['counts', 'err']].clip(lower=epsilon)
+
         # Pass both reconstructed signal and reconstructed openbeam to nbragg
         # nbragg will calculate transmission and uncertainties
         nbragg_data = nbragg.Data.from_counts(
-            self.reconstructed_data.drop("time",axis=1).clip(lower=epsilon).reset_index(),
-            self.reconstructed_openbeam.drop("time",axis=1).clip(lower=epsilon).reset_index(),
+            signal_df,
+            openbeam_df,
             L=L,
             tstep=tstep
         )
