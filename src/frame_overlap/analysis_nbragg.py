@@ -397,14 +397,8 @@ class Analysis:
         Set model parameters before fitting.
 
         This is a convenience method to set parameter values and vary flags
-        before calling fit().
-
-        **IMPORTANT NOTE**: nbragg's internal Rietveld fitting may override
-        some parameter constraints. If you find parameters are still being
-        varied during fitting, you may need to:
-        1. Fix the parameter after fitting and refit
-        2. Use nbragg's fit options like `vary_params` or `fix_params`
-        3. Access result.params directly and modify for subsequent fits
+        before calling fit(). Parameter constraints set here will be respected
+        during fitting (fit() uses stages="all" by default).
 
         Parameters
         ----------
@@ -417,7 +411,7 @@ class Analysis:
         --------
         >>> # Set thickness to 1.95 and fix it
         >>> analysis.set_params(thickness={'value': 1.95, 'vary': False})
-        >>> result = analysis.fit(recon, params=analysis.model.params)
+        >>> result = analysis.fit(recon)  # thickness will stay at 1.95
         >>>
         >>> # Set multiple parameters
         >>> analysis.set_params(
@@ -429,11 +423,9 @@ class Analysis:
         >>> # Shorthand: just set value (keeps existing vary flag)
         >>> analysis.set_params(thickness=1.95)
         >>>
-        >>> # If parameters still vary, try fixing after first fit:
-        >>> result = analysis.fit(recon)
-        >>> result.params['thickness'].value = 1.95
-        >>> result.params['thickness'].vary = False
-        >>> result2 = analysis.model.fit(analysis.data, params=result.params)
+        >>> # Direct access also works
+        >>> analysis.model.params['thickness'].value = 1.95
+        >>> analysis.model.params['thickness'].vary = False
         """
         if not hasattr(self.model, 'params'):
             raise ValueError("Model does not have params attribute")
@@ -483,11 +475,14 @@ class Analysis:
 
         Notes
         -----
-        To fix parameters before fitting, use the set_params() method or
-        pass a modified params object:
+        By default, this method uses `stages="all"` for single-stage fitting
+        that respects user-set parameter constraints. If you want multi-stage
+        Rietveld fitting, pass `stages=None` explicitly.
+
+        To fix parameters before fitting, use the set_params() method:
 
         >>> analysis.set_params(thickness={'value': 1.95, 'vary': False})
-        >>> result = analysis.fit(recon, params=analysis.model.params)
+        >>> result = analysis.fit(recon)  # thickness will stay at 1.95
         """
         if recon.reconstructed_data is None:
             raise ValueError(
@@ -498,11 +493,18 @@ class Analysis:
         # Convert reconstructed data to nbragg format
         self.data = recon.to_nbragg(L=L, tstep=tstep)
 
-        # Fit using nbragg, passing params if provided
-        if params is not None:
-            self.result = self.model.fit(self.data, params=params, **fit_kwargs)
-        else:
-            self.result = self.model.fit(self.data, params=self.model.params, **fit_kwargs)
+        # Use params from model if not explicitly provided
+        if params is None:
+            params = self.model.params
+
+        # Set default stages="all" to ensure single-stage fitting that respects
+        # user-set parameter constraints. Rietveld method (default) uses multi-stage
+        # fitting that may override parameter constraints.
+        if 'stages' not in fit_kwargs:
+            fit_kwargs['stages'] = 'all'
+
+        # Fit using nbragg
+        self.result = self.model.fit(self.data, params=params, **fit_kwargs)
 
         return self.result
 
