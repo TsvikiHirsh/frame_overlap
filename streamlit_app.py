@@ -1417,6 +1417,7 @@ if st.session_state.workflow_data is not None:
                     'freq': 'Frequency (Hz)',
                     'n_frames': 'Number of Frames (equally spaced)',
                     'n_frames_random': 'Number of Frames (random spacing)',
+                    'n_frames_random_min_gap': 'Number of Frames (random with min gap)',
                 }
 
                 param_to_sweep = st.selectbox(
@@ -1438,6 +1439,7 @@ if st.session_state.workflow_data is not None:
                     'freq': (10, 100, 10),
                     'n_frames': (2, 5, 1),
                     'n_frames_random': (2, 5, 1),
+                    'n_frames_random_min_gap': (2, 5, 1),
                 }
 
                 low_default, high_default, step_default = default_ranges.get(
@@ -1476,6 +1478,20 @@ if st.session_state.workflow_data is not None:
                         format="%.4f" if param_to_sweep == 'noise_power' else "%.2e" if param_to_sweep == 'flux' else "%.1f"
                     )
                     num_points = None
+
+                # Min gap slider for random_min_gap mode
+                if param_to_sweep == 'n_frames_random_min_gap':
+                    st.markdown("**Min Gap Configuration**")
+                    sweep_min_gap = st.slider(
+                        "Minimum Gap Between Frames (ms)",
+                        min_value=0.5,
+                        max_value=20.0,
+                        value=5.0,
+                        step=0.5,
+                        help="Minimum time gap between consecutive frames in milliseconds"
+                    )
+                else:
+                    sweep_min_gap = None
 
                 # Y-axis selection for plot
                 st.markdown("**Plot Configuration**")
