@@ -172,7 +172,9 @@ class Reconstruct:
         # Prepare data for nbragg: keep time column but rename to 'tof' (time-of-flight)
         # IMPORTANT: Must preserve the actual time values (especially if tof_min was used)
         # so that wavelength conversion is correct
-        # NOTE: reconstructed_data has time in microseconds already (from data.table)
+        # NOTE: reconstructed_data has time in microseconds (from data.table)
+        # nbragg interprets the tof column as: actual_time = tof * tstep
+        # So if time is in µs, we just rename it to 'tof' and must use tstep=1e-6 (1 µs)
         signal_df = self.reconstructed_data.reset_index()
         signal_df = signal_df.rename(columns={'time': 'tof'})
         signal_df[['counts', 'err']] = signal_df[['counts', 'err']].clip(lower=epsilon)
@@ -180,6 +182,9 @@ class Reconstruct:
         openbeam_df = self.reconstructed_openbeam.reset_index()
         openbeam_df = openbeam_df.rename(columns={'time': 'tof'})
         openbeam_df[['counts', 'err']] = openbeam_df[['counts', 'err']].clip(lower=epsilon)
+
+        # CRITICAL: Override tstep to 1e-6 since our time is in microseconds
+        tstep = 1e-6
 
         # Pass both reconstructed signal and reconstructed openbeam to nbragg
         # nbragg will calculate transmission and uncertainties
