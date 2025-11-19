@@ -645,13 +645,14 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
             # Set dummy values for auto-gen parameters (not used in manual mode)
             kernel_gen_mode = None
             kernel_seed = None
+            min_gap = None
 
         else:  # Auto-generate mode
             # Spacing type
             spacing_type = st.radio(
                 "Spacing Type",
-                ["Equal", "Random", "Blue Noise"],
-                help="Equal spacing, random spacing, or blue noise (more uniform than random)"
+                ["Equal", "Random", "Blue Noise", "Random Min Gap"],
+                help="Equal spacing, random spacing, blue noise (more uniform than random), or random with minimum gap constraint"
             )
 
             # Number of frames
@@ -663,8 +664,21 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
                 help="Number of overlapping frames"
             )
 
+            # Minimum gap slider (only for Random Min Gap)
+            if spacing_type == "Random Min Gap":
+                min_gap = st.slider(
+                    "Minimum Gap Between Frames (ms)",
+                    min_value=0.5,
+                    max_value=20.0,
+                    value=5.0,
+                    step=0.5,
+                    help="Minimum time gap between consecutive frames in milliseconds"
+                )
+            else:
+                min_gap = None
+
             # Kernel generation seed
-            if spacing_type in ["Random", "Blue Noise"]:
+            if spacing_type in ["Random", "Blue Noise", "Random Min Gap"]:
                 use_kernel_seed = st.checkbox("Use seed for reproducibility", value=True)
                 if use_kernel_seed:
                     kernel_seed = st.number_input("Kernel seed", min_value=1, value=42, step=1)
@@ -685,6 +699,7 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
         kernel_absolute = None
         total_time = None
         n_frames = 1
+        min_gap = None
 
 # Stage 5: Reconstruction
 with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
@@ -977,7 +992,7 @@ if process_button or process_button_bottom:
                 if kernel_mode == "Manual":
                     data.overlap(kernel=kernel_absolute, total_time=total_time)
                 else:  # Auto-generate
-                    data.overlap(kernel=kernel, total_time=total_time, mode=kernel_gen_mode, kernel_seed=kernel_seed)
+                    data.overlap(kernel=kernel, total_time=total_time, mode=kernel_gen_mode, kernel_seed=kernel_seed, min_gap=min_gap)
                 st.sidebar.success(f"✓ Overlap ({n_frames} frames)")
 
             st.session_state.workflow_data = data
@@ -1653,7 +1668,8 @@ if st.session_state.workflow_data is not None:
                                     recon_objects.append({
                                         'value': value,
                                         'recon': recon_sweep,
-                                        'data': data_sweep
+                                        'data': data_sweep,
+                                        'analysis': analysis_sweep if (apply_analysis and ANALYSIS_AVAILABLE and 'analysis_sweep' in locals()) else None
                                     })
 
                                 except Exception as e:
@@ -1824,6 +1840,31 @@ if st.session_state.workflow_data is not None:
                         try:
                             mpl_fig = selected['recon'].plot(kind='transmission', show_errors=show_errors_individual,
                                                             figsize=(12, 8), ylim=(0, 1))
+
+                            # Add nbragg fit overlay if available
+                            if selected.get('analysis') is not None and selected['analysis'].result is not None:
+                                try:
+                                    result = selected['analysis'].result
+                                    axes = mpl_fig.get_axes()
+                                    if len(axes) >= 1:
+                                        ax_data = axes[0]
+
+                                        # Get nbragg best fit data
+                                        wavelength_angstrom = result.userkws['wl']
+                                        best_fit_transmission = result.best_fit
+
+                                        # Convert wavelength to TOF
+                                        L = 9.0
+                                        time_us = wavelength_to_tof(wavelength_angstrom, L)
+                                        time_ms = time_us / 1000
+
+                                        # Plot nbragg fit with highest z-order (on top)
+                                        ax_data.plot(time_ms, best_fit_transmission,
+                                                   label='nbragg fit', color='green', linewidth=2,
+                                                   linestyle='--', zorder=10)
+                                        ax_data.legend()
+                                except Exception as e_nbragg:
+                                    st.warning(f"Could not add nbragg fit overlay: {e_nbragg}")
 
                             # Display based on selected backend
                             if use_matplotlib:

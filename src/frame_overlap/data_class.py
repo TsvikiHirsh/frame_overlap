@@ -310,7 +310,7 @@ class Data:
         })
         return result
 
-    def _generate_kernel(self, n_frames, total_time, mode, seed=None):
+    def _generate_kernel(self, n_frames, total_time, mode, seed=None, min_gap=None):
         """
         Generate a kernel (frame timing sequence) based on the specified mode.
 
@@ -321,9 +321,11 @@ class Data:
         total_time : float
             Total time window in milliseconds
         mode : str
-            Generation mode: 'random', 'equal', or 'blue_noise'
+            Generation mode: 'random', 'equal', 'blue_noise', or 'random_min_gap'
         seed : int, optional
             Random seed for reproducibility
+        min_gap : float, optional
+            Minimum gap between frames in milliseconds (only used for 'random_min_gap' mode)
 
         Returns
         -------
@@ -370,12 +372,55 @@ class Data:
             # Sort the kernel
             kernel = np.sort(kernel)
 
+        elif mode == 'random_min_gap':
+            # Random frame positions with minimum gap constraint
+            if min_gap is None:
+                raise ValueError("min_gap must be specified for 'random_min_gap' mode")
+
+            # Check if it's even possible to fit all frames with minimum gap
+            if n_frames > 1 and (n_frames - 1) * min_gap >= total_time:
+                raise ValueError(
+                    f"Cannot fit {n_frames} frames with min_gap={min_gap} ms "
+                    f"in total_time={total_time} ms. Maximum frames possible: "
+                    f"{int(total_time / min_gap) + 1}"
+                )
+
+            # Use rejection sampling to generate valid kernel
+            max_attempts = 10000
+            for attempt in range(max_attempts):
+                # Generate random positions
+                kernel = np.sort(np.random.uniform(0, total_time, n_frames))
+                # Ensure first frame starts at 0
+                kernel[0] = 0.0
+
+                # Check if all gaps meet minimum requirement
+                if n_frames > 1:
+                    gaps = np.diff(kernel)
+                    if np.all(gaps >= min_gap):
+                        break
+            else:
+                # If rejection sampling fails, fall back to systematic placement
+                # This ensures we always return a valid kernel
+                if n_frames == 1:
+                    kernel = np.array([0.0])
+                else:
+                    # Use equal spacing as fallback
+                    kernel = np.linspace(0, total_time - (n_frames - 1) * min_gap, n_frames, endpoint=True)
+                    # Add small random perturbations while maintaining min_gap
+                    for i in range(1, n_frames - 1):
+                        max_shift = min(
+                            kernel[i] - kernel[i-1] - min_gap,
+                            kernel[i+1] - kernel[i] - min_gap
+                        )
+                        if max_shift > 0:
+                            kernel[i] += np.random.uniform(-max_shift/2, max_shift/2)
+
         else:
             raise ValueError(f"Unknown kernel generation mode: {mode}")
 
         return kernel
 
-    def overlap(self, kernel, total_time=None, freq=None, bin_width=10, poisson_seed=None, mode='superimpose', kernel_seed=None):
+    def overlap(self, kernel, total_time=None, freq=None, bin_width=10, poisson_seed=None, mode='superimpose', kernel_seed=None, min_gap=None):
         """
         Create overlapping frame structure.
 
@@ -403,11 +448,12 @@ class Data:
             - mode='random': generate random frame positions
             - mode='equal': generate evenly spaced frames
             - mode='blue_noise': generate blue noise distributed frames (more evenly spaced than random)
+            - mode='random_min_gap': generate random frame positions with minimum gap constraint
         total_time : float, optional
             Total time frame in milliseconds. If None, deduced automatically.
             - For mode='superimpose': ignored, uses input data length
             - For mode='extend': sets the extended time window
-            - For mode='random'/'equal'/'blue_noise': required, sets the time window for frame generation
+            - For mode='random'/'equal'/'blue_noise'/'random_min_gap': required, sets the time window for frame generation
         freq : float, optional
             Frequency in Hz. If provided, total_time = 1000/freq ms.
             For example, freq=20 Hz means total_time=50 ms.
@@ -426,8 +472,11 @@ class Data:
             - 'random': Generate random frame positions (requires kernel to be int and total_time to be set)
             - 'equal': Generate evenly spaced frames (requires kernel to be int and total_time to be set)
             - 'blue_noise': Generate blue noise distributed frames (requires kernel to be int and total_time to be set)
+            - 'random_min_gap': Generate random frame positions with minimum gap constraint (requires kernel to be int, total_time, and min_gap to be set)
         kernel_seed : int, optional
-            Random seed for kernel generation (only used when mode is 'random' or 'blue_noise')
+            Random seed for kernel generation (only used when mode is 'random', 'blue_noise', or 'random_min_gap')
+        min_gap : float, optional
+            Minimum gap between frames in milliseconds (only used when mode is 'random_min_gap')
 
         Returns
         -------
@@ -446,6 +495,8 @@ class Data:
         >>> data.overlap(kernel=5, total_time=50, mode='equal')
         >>> # Blue noise 5 frames:
         >>> data.overlap(kernel=5, total_time=50, mode='blue_noise', kernel_seed=42)
+        >>> # Random kernel with minimum 5 ms gap between frames:
+        >>> data.overlap(kernel=5, total_time=50, mode='random_min_gap', min_gap=5.0, kernel_seed=42)
         >>> # With second Poisson to randomize overlapping:
         >>> data.overlap(kernel=[0, 25], poisson_seed=42)
         """
@@ -467,12 +518,12 @@ class Data:
         # Generate kernel if integer is provided
         if isinstance(kernel, int):
             n_frames = kernel
-            if mode not in ['random', 'equal', 'blue_noise']:
-                raise ValueError(f"When kernel is an integer, mode must be 'random', 'equal', or 'blue_noise', got '{mode}'")
+            if mode not in ['random', 'equal', 'blue_noise', 'random_min_gap']:
+                raise ValueError(f"When kernel is an integer, mode must be 'random', 'equal', 'blue_noise', or 'random_min_gap', got '{mode}'")
             if total_time is None:
                 raise ValueError("total_time must be specified when generating kernel from integer")
 
-            kernel = self._generate_kernel(n_frames, total_time, mode, kernel_seed)
+            kernel = self._generate_kernel(n_frames, total_time, mode, kernel_seed, min_gap)
             print(f"Generated {mode} kernel with {n_frames} frames: {kernel}")
             # After kernel generation, switch to 'extend' mode for actual overlap
             mode = 'extend'
