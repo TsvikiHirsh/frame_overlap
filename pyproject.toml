@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frame_overlap"
-version = "0.2.0"
+version = "0.3.1"
 description = "Neutron Time-of-Flight frame overlap analysis with deconvolution and material fitting."
 authors = [
     { name = "Tsviki Y. Hirsh", email = "tsviki@soreq.gov.il" }
