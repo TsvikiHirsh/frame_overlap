@@ -1249,7 +1249,7 @@ if st.session_state.workflow_data is not None:
 
                         # Plot nbragg fit on the same axes with highest z-order (on top)
                         ax_data.plot(time_ms, best_fit_transmission,
-                                   label='nbragg fit', color='green', linewidth=2, linestyle='--',
+                                   label='nbragg fit', color='green', linewidth=2,
                                    zorder=10)
                         ax_data.legend()
 
@@ -1597,6 +1597,11 @@ if st.session_state.workflow_data is not None:
                                             sweep_kernel = sorted(np.random.uniform(0, max_time, n))
                                             sweep_kernel[0] = 0  # First frame always at 0
                                             data_sweep.overlap(kernel=sweep_kernel)
+                                        elif param_to_sweep == 'n_frames_random_min_gap':
+                                            # Randomly spaced frames with minimum gap constraint
+                                            n = int(value)
+                                            max_time = frame_time_ms if 'frame_time_ms' in locals() else 50  # Use frame time from Poisson
+                                            data_sweep.overlap(kernel=n, total_time=max_time, mode='random_min_gap', min_gap=sweep_min_gap, kernel_seed=seed_poisson if seed_poisson else 42)
                                         else:
                                             data_sweep.overlap(kernel=kernel_absolute)
 
@@ -1877,7 +1882,7 @@ if st.session_state.workflow_data is not None:
                                         # Plot nbragg fit with highest z-order (on top)
                                         ax_data.plot(time_ms, best_fit_transmission,
                                                    label='nbragg fit', color='green', linewidth=2,
-                                                   linestyle='--', zorder=10)
+                                                   zorder=10)
                                         ax_data.legend()
                                 except Exception as e_nbragg:
                                     st.warning(f"Could not add nbragg fit overlay: {e_nbragg}")

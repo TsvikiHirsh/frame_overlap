@@ -375,7 +375,85 @@ class Analysis:
                 f"Make sure 'Fe_sg229_Iron-alpha.ncmat' is available in nbragg."
             )
 
-    def fit(self, recon, L=9.0, tstep=10e-6, **fit_kwargs):
+    def get_params(self):
+        """
+        Get the current model parameters.
+
+        Returns
+        -------
+        lmfit.Parameters
+            The model's parameter object
+
+        Examples
+        --------
+        >>> params = analysis.get_params()
+        >>> print(params)
+        >>> print(f"Thickness: {params['thickness'].value}, vary={params['thickness'].vary}")
+        """
+        return self.model.params
+
+    def set_params(self, **param_settings):
+        """
+        Set model parameters before fitting.
+
+        This is a convenience method to set parameter values and vary flags
+        before calling fit().
+
+        **IMPORTANT NOTE**: nbragg's internal Rietveld fitting may override
+        some parameter constraints. If you find parameters are still being
+        varied during fitting, you may need to:
+        1. Fix the parameter after fitting and refit
+        2. Use nbragg's fit options like `vary_params` or `fix_params`
+        3. Access result.params directly and modify for subsequent fits
+
+        Parameters
+        ----------
+        **param_settings : dict
+            Parameter settings as keyword arguments. Each parameter can be:
+            - A single value to set the parameter value
+            - A dict with 'value' and/or 'vary' keys
+
+        Examples
+        --------
+        >>> # Set thickness to 1.95 and fix it
+        >>> analysis.set_params(thickness={'value': 1.95, 'vary': False})
+        >>> result = analysis.fit(recon, params=analysis.model.params)
+        >>>
+        >>> # Set multiple parameters
+        >>> analysis.set_params(
+        ...     thickness={'value': 1.95, 'vary': False},
+        ...     norm={'value': 1.0, 'vary': True},
+        ...     temp={'vary': False}
+        ... )
+        >>>
+        >>> # Shorthand: just set value (keeps existing vary flag)
+        >>> analysis.set_params(thickness=1.95)
+        >>>
+        >>> # If parameters still vary, try fixing after first fit:
+        >>> result = analysis.fit(recon)
+        >>> result.params['thickness'].value = 1.95
+        >>> result.params['thickness'].vary = False
+        >>> result2 = analysis.model.fit(analysis.data, params=result.params)
+        """
+        if not hasattr(self.model, 'params'):
+            raise ValueError("Model does not have params attribute")
+
+        for param_name, setting in param_settings.items():
+            if param_name not in self.model.params:
+                raise ValueError(f"Parameter '{param_name}' not found in model. "
+                               f"Available parameters: {list(self.model.params.keys())}")
+
+            if isinstance(setting, dict):
+                # Dict with 'value' and/or 'vary' keys
+                if 'value' in setting:
+                    self.model.params[param_name].value = setting['value']
+                if 'vary' in setting:
+                    self.model.params[param_name].vary = setting['vary']
+            else:
+                # Just a value
+                self.model.params[param_name].value = setting
+
+    def fit(self, recon, L=9.0, tstep=10e-6, params=None, **fit_kwargs):
         """
         Fit the model to reconstructed data.
 
@@ -387,6 +465,9 @@ class Analysis:
             Flight path length in meters. Default is 9.0 m.
         tstep : float, optional
             Time step in seconds. Default is 10e-6 s (10 µs).
+        params : lmfit.Parameters, optional
+            Custom parameters to use for fitting. If None, uses self.model.params.
+            This allows you to override parameter settings before fitting.
         **fit_kwargs
             Additional keyword arguments passed to model.fit()
 
@@ -399,6 +480,14 @@ class Analysis:
         ------
         ValueError
             If reconstruction has not been performed yet
+
+        Notes
+        -----
+        To fix parameters before fitting, use the set_params() method or
+        pass a modified params object:
+
+        >>> analysis.set_params(thickness={'value': 1.95, 'vary': False})
+        >>> result = analysis.fit(recon, params=analysis.model.params)
         """
         if recon.reconstructed_data is None:
             raise ValueError(
@@ -409,8 +498,11 @@ class Analysis:
         # Convert reconstructed data to nbragg format
         self.data = recon.to_nbragg(L=L, tstep=tstep)
 
-        # Fit using nbragg
-        self.result = self.model.fit(self.data, **fit_kwargs)
+        # Fit using nbragg, passing params if provided
+        if params is not None:
+            self.result = self.model.fit(self.data, params=params, **fit_kwargs)
+        else:
+            self.result = self.model.fit(self.data, params=self.model.params, **fit_kwargs)
 
         return self.result
 
