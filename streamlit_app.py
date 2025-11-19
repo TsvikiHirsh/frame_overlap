@@ -1232,9 +1232,10 @@ if st.session_state.workflow_data is not None:
                         time_us = wavelength_to_tof(wavelength_angstrom, L)  # time in microseconds
                         time_ms = time_us / 1000  # time in milliseconds
 
-                        # Plot nbragg fit on the same axes
+                        # Plot nbragg fit on the same axes with highest z-order (on top)
                         ax_data.plot(time_ms, best_fit_transmission,
-                                   label='nbragg fit', color='green', linewidth=2, linestyle='--')
+                                   label='nbragg fit', color='green', linewidth=2, linestyle='--',
+                                   zorder=10)
                         ax_data.legend()
 
                         st.success(f"✅ nbragg fit overlay added ({len(best_fit_transmission)} points, {time_ms.min():.2f}-{time_ms.max():.2f} ms)")

@@ -590,7 +590,10 @@ class Data:
             total_time_us = n_bins * bin_width
 
             # Create output arrays (EXTENDED length)
-            new_time = np.arange(0, n_bins) * bin_width
+            # IMPORTANT: Preserve the time offset from the input data
+            # If input data was filtered (e.g., tof_min=1000), start from that offset
+            time_offset = time_array.min()
+            new_time = np.arange(0, n_bins) * bin_width + time_offset
             new_counts = np.zeros(n_bins)
             new_err_squared = np.zeros(n_bins)
 
@@ -600,7 +603,8 @@ class Data:
                 start_bin = int(np.round(frame_start_us / bin_width))
 
                 # Calculate indices for all data points in this frame
-                data_bins = np.round(time_array / bin_width).astype(int)
+                # Adjust for time offset: subtract offset before converting to bins
+                data_bins = np.round((time_array - time_offset) / bin_width).astype(int)
                 target_bins = (start_bin + data_bins) % n_bins  # Wraparound with modulo
 
                 # Add counts and errors using array operations

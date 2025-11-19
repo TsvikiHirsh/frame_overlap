@@ -1025,11 +1025,15 @@ class Reconstruct:
 
         # Extract color for both plots if provided
         data_color = data_kwargs.pop('color', None)
+        # Plot with appropriate z-order: lower for noisier data, higher for cleaner
+        # Convolved/Poissoned (noisier) gets zorder=1 (bottom)
         ref_df.set_index('time')['transmission'].plot(
             ax=ax_data, drawstyle='steps-mid', label='Convolved (Target)', alpha=0.7,
-            color=data_color, **data_kwargs)
+            color=data_color, zorder=1, **data_kwargs)
+        # Reconstructed gets zorder=5 (middle, above convolved)
         recon_df.set_index('time')['transmission'].plot(
-            ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **data_kwargs)
+            ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7,
+            zorder=5, **data_kwargs)
 
         # Error bars
         if show_errors:
@@ -1100,11 +1104,13 @@ class Reconstruct:
         recon_df = pd.DataFrame({'time': time_ms, 'counts': recon_counts})
 
         data_color = data_kwargs.pop('color', None)
+        # Plot with appropriate z-order: lower for noisier data
         ref_df.set_index('time')['counts'].plot(
             ax=ax_data, drawstyle='steps-mid', label='Convolved (Target)', alpha=0.7,
-            color=data_color, **data_kwargs)
+            color=data_color, zorder=1, **data_kwargs)
         recon_df.set_index('time')['counts'].plot(
-            ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7, **data_kwargs)
+            ax=ax_data, drawstyle='steps-mid', label='Reconstructed', alpha=0.7,
+            zorder=5, **data_kwargs)
 
         # Error bars
         if show_errors:
