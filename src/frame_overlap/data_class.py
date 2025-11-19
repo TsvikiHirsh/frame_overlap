@@ -80,8 +80,17 @@ class Data:
     """
 
     def __init__(self, signal_file=None, openbeam_file=None, flux=None,
-                 duration=None, threshold=None, max_stack=2400, freq=None):
-        """Initialize Data object and load data files if provided."""
+                 duration=None, threshold=None, max_stack=2400, freq=None,
+                 tof_min=None, tof_max=None):
+        """Initialize Data object and load data files if provided.
+
+        Parameters
+        ----------
+        tof_min : float, optional
+            Minimum time-of-flight in microseconds. Data below this will be filtered out.
+        tof_max : float, optional
+            Maximum time-of-flight in microseconds. Data above this will be filtered out.
+        """
         self.signal_file = signal_file
         self.openbeam_file = openbeam_file
         self.flux = flux  # n/cm²/s (for continuous source)
@@ -89,6 +98,8 @@ class Data:
         self.freq = freq  # Hz
         self.threshold = threshold
         self.max_stack = max_stack
+        self.tof_min = tof_min  # µs - minimum TOF for filtering
+        self.tof_max = tof_max  # µs - maximum TOF for filtering
         self.pulse_duration = None  # µs - set by convolute_response()
 
         # Initialize data storage for signal at each stage
@@ -159,6 +170,12 @@ class Data:
         if df[['time', 'counts', 'err']].isnull().any().any():
             raise ValueError("Data must not contain NaN values")
 
+        # Apply TOF filtering if specified
+        if self.tof_min is not None:
+            df = df[df['time'] >= self.tof_min].copy()
+        if self.tof_max is not None:
+            df = df[df['time'] <= self.tof_max].copy()
+
         # Store as DataFrame
         self.data = df[['time', 'counts', 'err']].copy()
         self.table = self.data  # For backward compatibility
@@ -199,6 +216,12 @@ class Data:
             raise ValueError("Errors must be positive")
         if df[['time', 'counts', 'err']].isnull().any().any():
             raise ValueError("Data must not contain NaN values")
+
+        # Apply TOF filtering if specified
+        if self.tof_min is not None:
+            df = df[df['time'] >= self.tof_min].copy()
+        if self.tof_max is not None:
+            df = df[df['time'] <= self.tof_max].copy()
 
         # Store as DataFrame
         self.op_data = df[['time', 'counts', 'err']].copy()
