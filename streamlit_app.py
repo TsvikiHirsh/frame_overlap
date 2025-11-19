@@ -406,6 +406,16 @@ st.sidebar.header("⚙️ Processing Pipeline")
 process_button = st.sidebar.button("🚀 Run Pipeline", type="primary", use_container_width=True)
 
 st.sidebar.markdown("---")
+
+# Display options
+with st.sidebar.expander("🎨 Display Options", expanded=False):
+    use_matplotlib = st.checkbox(
+        "Use Matplotlib plots",
+        value=False,
+        help="Use static matplotlib plots instead of interactive plotly plots"
+    )
+
+st.sidebar.markdown("---")
 st.sidebar.markdown("Configure each stage of the analysis pipeline:")
 
 # Initialize session state for workflow
@@ -1138,15 +1148,23 @@ if st.session_state.workflow_data is not None:
                     mpl_fig = data.plot(kind='signal', show_stages=show_stages,
                                        show_errors=show_errors, figsize=(12, 6))
 
-                # Convert to Plotly for interactivity
-                plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors)
+                # Display plot based on selected backend
+                if use_matplotlib:
+                    # Use matplotlib directly
+                    if log_scale:
+                        for ax in mpl_fig.get_axes():
+                            ax.set_yscale('log')
+                    st.pyplot(mpl_fig, use_container_width=True)
+                else:
+                    # Convert to Plotly for interactivity
+                    plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors)
 
-                # Apply log scale if requested
-                if log_scale:
-                    plotly_fig.update_yaxes(type="log")
+                    # Apply log scale if requested
+                    if log_scale:
+                        plotly_fig.update_yaxes(type="log")
 
-                st.plotly_chart(plotly_fig, use_container_width=True)
-                plt.close(mpl_fig)
+                    st.plotly_chart(plotly_fig, use_container_width=True)
+                    plt.close(mpl_fig)
 
         with col2:
             st.markdown("**Current Stage Info**")
@@ -1229,15 +1247,22 @@ if st.session_state.workflow_data is not None:
                 if st.session_state.analysis is None:
                     st.info("💡 Enable 'Apply nbragg Analysis' in sidebar (Stage 6) to see the nbragg fit curve")
 
-            # Convert to Plotly for interactivity
-            plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_recon)
+            # Display plot based on selected backend
+            if use_matplotlib:
+                # Use matplotlib directly
+                if recon_log_scale:
+                    mpl_fig.get_axes()[0].set_yscale('log')  # Only first subplot
+                st.pyplot(mpl_fig, use_container_width=True)
+            else:
+                # Convert to Plotly for interactivity
+                plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_recon)
 
-            # Apply log scale if requested (only to top plot)
-            if recon_log_scale:
-                plotly_fig.update_yaxes(type="log", row=1, col=1)
+                # Apply log scale if requested (only to top plot)
+                if recon_log_scale:
+                    plotly_fig.update_yaxes(type="log", row=1, col=1)
 
-            st.plotly_chart(plotly_fig, use_container_width=True)
-            plt.close(mpl_fig)
+                st.plotly_chart(plotly_fig, use_container_width=True)
+                plt.close(mpl_fig)
         else:
             st.info("Run reconstruction to see results here.")
 
@@ -1690,42 +1715,69 @@ if st.session_state.workflow_data is not None:
 
                     # Plot results
                     if param_to_sweep in results_df.columns and y_param in results_df.columns:
-                        fig = go.Figure()
+                        if use_matplotlib:
+                            # Create matplotlib plot
+                            fig_mpl, ax = plt.subplots(figsize=(10, 5))
 
-                        # Plot all points (including NaN which will be skipped by plotly)
-                        fig.add_trace(go.Scatter(
-                            x=results_df[param_to_sweep],
-                            y=results_df[y_param],
-                            mode='lines+markers',
-                            name=y_param_options[y_param],
-                            line=dict(color='#1f77b4', width=2),
-                            marker=dict(size=8)
-                        ))
+                            # Plot all points
+                            ax.plot(results_df[param_to_sweep], results_df[y_param],
+                                   'o-', color='#1f77b4', linewidth=2, markersize=8,
+                                   label=y_param_options[y_param])
 
-                        # Highlight best point (if valid data exists)
-                        valid_df = results_df.dropna(subset=[y_param])
-                        if len(valid_df) > 0:
-                            # Minimize chi2, rmse, nrmse, nbragg_redchi; Maximize r_squared
-                            minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
-                            best_idx = valid_df[y_param].idxmin() if y_param in minimize_params else valid_df[y_param].idxmax()
+                            # Highlight best point
+                            valid_df = results_df.dropna(subset=[y_param])
+                            if len(valid_df) > 0:
+                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
+                                best_idx = valid_df[y_param].idxmin() if y_param in minimize_params else valid_df[y_param].idxmax()
+                                ax.plot(results_df.loc[best_idx, param_to_sweep],
+                                       results_df.loc[best_idx, y_param],
+                                       '*', color='red', markersize=15, label='Best')
+
+                            ax.set_xlabel(sweep_params[param_to_sweep])
+                            ax.set_ylabel(y_param_options[y_param])
+                            ax.set_title(f"{y_param_options[y_param]} vs {sweep_params[param_to_sweep]}")
+                            ax.legend()
+                            ax.grid(True, alpha=0.3)
+
+                            st.pyplot(fig_mpl, use_container_width=True)
+                        else:
+                            # Create plotly plot
+                            fig = go.Figure()
+
+                            # Plot all points (including NaN which will be skipped by plotly)
                             fig.add_trace(go.Scatter(
-                                x=[results_df.loc[best_idx, param_to_sweep]],
-                                y=[results_df.loc[best_idx, y_param]],
-                                mode='markers',
-                                name='Best',
-                                marker=dict(size=15, color='red', symbol='star')
+                                x=results_df[param_to_sweep],
+                                y=results_df[y_param],
+                                mode='lines+markers',
+                                name=y_param_options[y_param],
+                                line=dict(color='#1f77b4', width=2),
+                                marker=dict(size=8)
                             ))
 
-                        fig.update_layout(
-                            title=f"{y_param_options[y_param]} vs {sweep_params[param_to_sweep]}",
-                            xaxis_title=sweep_params[param_to_sweep],
-                            yaxis_title=y_param_options[y_param],
-                            hovermode='x unified',
-                            template='plotly_white',
-                            height=500
-                        )
+                            # Highlight best point (if valid data exists)
+                            valid_df = results_df.dropna(subset=[y_param])
+                            if len(valid_df) > 0:
+                                # Minimize chi2, rmse, nrmse, nbragg_redchi; Maximize r_squared
+                                minimize_params = ['chi2', 'chi2_per_dof', 'rmse', 'nrmse', 'nbragg_redchi']
+                                best_idx = valid_df[y_param].idxmin() if y_param in minimize_params else valid_df[y_param].idxmax()
+                                fig.add_trace(go.Scatter(
+                                    x=[results_df.loc[best_idx, param_to_sweep]],
+                                    y=[results_df.loc[best_idx, y_param]],
+                                    mode='markers',
+                                    name='Best',
+                                    marker=dict(size=15, color='red', symbol='star')
+                                ))
 
-                        st.plotly_chart(fig, use_container_width=True)
+                            fig.update_layout(
+                                title=f"{y_param_options[y_param]} vs {sweep_params[param_to_sweep]}",
+                                xaxis_title=sweep_params[param_to_sweep],
+                                yaxis_title=y_param_options[y_param],
+                                hovermode='x unified',
+                                template='plotly_white',
+                                height=500
+                            )
+
+                            st.plotly_chart(fig, use_container_width=True)
 
                     # Show data table
                     with st.expander("📊 View Full Results Table"):
@@ -1771,9 +1823,14 @@ if st.session_state.workflow_data is not None:
                         try:
                             mpl_fig = selected['recon'].plot(kind='transmission', show_errors=show_errors_individual,
                                                             figsize=(12, 8), ylim=(0, 1))
-                            plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_individual)
-                            st.plotly_chart(plotly_fig, use_container_width=True)
-                            plt.close(mpl_fig)
+
+                            # Display based on selected backend
+                            if use_matplotlib:
+                                st.pyplot(mpl_fig, use_container_width=True)
+                            else:
+                                plotly_fig = mpl_to_plotly(mpl_fig, show_errors=show_errors_individual)
+                                st.plotly_chart(plotly_fig, use_container_width=True)
+                                plt.close(mpl_fig)
                         except Exception as e:
                             st.error(f"Error plotting reconstruction: {e}")
 
