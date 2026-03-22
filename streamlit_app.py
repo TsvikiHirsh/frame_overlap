@@ -601,8 +601,51 @@ with st.sidebar.expander("🎲 3. Poisson Sampling", expanded=False):
         seed_poisson = None
         frame_time_ms = None
 
-# Stage 4: Frame Overlap
-with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
+# Stage 4: Neutron Guide Efficiency
+with st.sidebar.expander("🌊 4. Neutron Guide Efficiency", expanded=False):
+    apply_guide_efficiency = st.checkbox("Apply Guide Efficiency", value=False,
+                                         help="Model wavelength-dependent transmission through neutron guide")
+
+    if apply_guide_efficiency:
+        st.markdown("**Guide Parameters**")
+        guide_length = st.number_input(
+            "Guide Length (m)",
+            min_value=1.0,
+            max_value=50.0,
+            value=5.0,
+            step=0.5,
+            format="%.1f",
+            help="Length of the neutron guide in meters"
+        )
+
+        m_value = st.number_input(
+            "m-value",
+            min_value=1.0,
+            max_value=6.0,
+            value=3.0,
+            step=0.5,
+            format="%.1f",
+            help="Supermirror coating m-value (1=natural Ni, higher=better for short λ)"
+        )
+
+        flight_path = st.number_input(
+            "Flight Path (m)",
+            min_value=1.0,
+            max_value=50.0,
+            value=9.0,
+            step=0.5,
+            format="%.1f",
+            help="Total flight path length for TOF-wavelength conversion"
+        )
+
+        st.info("💡 Longer wavelengths → higher transmission (thermal guide physics)")
+    else:
+        guide_length = None
+        m_value = None
+        flight_path = None
+
+# Stage 5: Frame Overlap
+with st.sidebar.expander("🔄 5. Frame Overlap", expanded=False):
     apply_overlap = st.checkbox("Apply Overlap", value=True)
 
     if apply_overlap:
@@ -686,8 +729,8 @@ with st.sidebar.expander("🔄 4. Frame Overlap", expanded=False):
         total_time = None
         n_frames = 1
 
-# Stage 5: Reconstruction
-with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
+# Stage 6: Reconstruction
+with st.sidebar.expander("🔧 6. Reconstruction", expanded=False):
     apply_reconstruction = st.checkbox("Apply Reconstruction", value=True)
 
     if apply_reconstruction:
@@ -794,8 +837,8 @@ with st.sidebar.expander("🔧 5. Reconstruction", expanded=False):
         recon_params = {}
         tmin, tmax = None, None
 
-# Stage 6: Analysis (nbragg)
-with st.sidebar.expander("🔬 6. Analysis (nbragg)", expanded=False):
+# Stage 7: Analysis (nbragg)
+with st.sidebar.expander("🔬 7. Analysis (nbragg)", expanded=False):
     if not ANALYSIS_AVAILABLE:
         st.error("⚠️ nbragg not available")
         st.caption("See diagnostic info in main page")
@@ -971,6 +1014,12 @@ if process_button or process_button_bottom:
                 data.poisson_sample(flux=flux_new, freq=freq_new,
                                    measurement_time=measurement_time, seed=seed_poisson)
                 st.sidebar.success(f"✓ Poisson (flux: {flux_new:.1e})")
+
+            if apply_guide_efficiency:
+                data.apply_guide_efficiency(guide_length=guide_length,
+                                           m_value=m_value,
+                                           flight_path=flight_path)
+                st.sidebar.success(f"✓ Guide Efficiency (L={guide_length:.1f}m, m={m_value:.1f})")
 
             if apply_overlap:
                 # Handle both manual kernel and auto-generated kernel
@@ -1853,6 +1902,7 @@ else:
     - 📁 **Data Loading**: Load iron powder and openbeam data with original measurement parameters
     - 🔊 **Instrument Response**: Convolve with instrument pulse shape
     - 🎲 **Poisson Sampling**: Apply counting statistics with new flux conditions
+    - 🌊 **Neutron Guide Efficiency**: Model wavelength-dependent transmission (higher for longer λ)
     - 🔄 **Frame Overlap**: Create overlapping frames (2-4 frames supported)
     - 🔧 **Reconstruction**: Recover original signal using deconvolution
     - 🔬 **Analysis (nbragg)**: Fit reconstructed data with material cross-section models

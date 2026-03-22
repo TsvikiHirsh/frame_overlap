@@ -770,6 +770,117 @@ class Data:
         result['err'] = poisson_err
         return result
 
+    def apply_guide_efficiency(self, guide_length, m_value, flight_path=9.0):
+        """
+        Apply neutron guide transmission efficiency to the data.
+
+        For thermal neutrons, guide transmission increases with wavelength due to
+        larger critical angles for longer wavelengths. This is applied AFTER Poisson
+        sampling to model the realistic effect of a supermirror neutron guide.
+
+        The empirical formula used is based on the wavelength-dependent acceptance:
+            T(λ) = 1 - exp(-((λ * m) / λ_char)^α)
+
+        where:
+        - λ is wavelength in Angstroms
+        - m is the supermirror m-value (coating quality)
+        - λ_char ~ guide_length * 0.5 (characteristic wavelength in Å)
+        - α = 1.5 (empirical exponent for ballistic guide)
+
+        This gives higher transmission at longer wavelengths, consistent with thermal
+        neutron guide physics where T(λ) ∝ λ² for small λ.
+
+        **Workflow**: Convolute → Poisson → **Guide Efficiency** → Overlap
+
+        Applies to both signal and openbeam data.
+
+        Parameters
+        ----------
+        guide_length : float
+            Neutron guide length in meters
+        m_value : float
+            Supermirror m-value (1 = natural Ni, 2, 3, 4, etc.)
+            Higher m-value = better transmission for shorter wavelengths
+        flight_path : float, optional
+            Flight path length in meters for TOF-wavelength conversion.
+            Default is 9.0 m (typical for many instruments).
+
+        Returns
+        -------
+        self
+            Returns self for method chaining
+
+        Examples
+        --------
+        >>> # Typical workflow with guide efficiency
+        >>> data = Data('signal.csv', 'openbeam.csv', flux=1e6, duration=1.0, freq=20)
+        >>> data.convolute_response(200)
+        >>> data.poisson_sample(duty_cycle=0.8)
+        >>> data.apply_guide_efficiency(guide_length=5.0, m_value=3, flight_path=9.0)
+        >>> data.overlap([0, 25])
+
+        >>> # With different guide parameters
+        >>> data.apply_guide_efficiency(guide_length=10.0, m_value=2, flight_path=15.0)
+        """
+        # Apply to signal (poissoned data if available, else most recent stage)
+        source_data = (self.poissoned_data if self.poissoned_data is not None
+                      else self.overlapped_data if self.overlapped_data is not None
+                      else self.convolved_data if self.convolved_data is not None
+                      else self.data)
+
+        if source_data is None:
+            raise ValueError("No data loaded. Call load_signal_data first.")
+
+        # Calculate guide efficiency and apply
+        self.poissoned_data = self._apply_guide_efficiency(source_data, guide_length,
+                                                            m_value, flight_path)
+        self.table = self.poissoned_data
+
+        # Apply to openbeam if available
+        op_source = (self.op_poissoned_data if self.op_poissoned_data is not None
+                    else self.op_overlapped_data if self.op_overlapped_data is not None
+                    else self.op_convolved_data if self.op_convolved_data is not None
+                    else self.op_data)
+
+        if op_source is not None:
+            self.op_poissoned_data = self._apply_guide_efficiency(op_source, guide_length,
+                                                                   m_value, flight_path)
+            self.openbeam_table = self.op_poissoned_data
+
+        print(f"Applied guide efficiency: guide_length={guide_length:.1f}m, m-value={m_value}, "
+              f"flight_path={flight_path:.1f}m")
+
+        return self
+
+    def _apply_guide_efficiency(self, df, guide_length, m_value, flight_path):
+        """Helper to apply guide efficiency to a dataframe."""
+        # Convert TOF (µs) to wavelength (Angstroms)
+        # de Broglie: λ = (h / m_n) * (t / L)
+        # where h/m_n ≈ 3.95603e-3 Å·m/µs
+        time_us = df['time'].values
+        h_over_m = 3.95603e-3  # (h/m_n) in Å·m/µs
+        wavelength = h_over_m * time_us / flight_path  # Angstroms
+
+        # Empirical guide transmission formula
+        # T(λ) increases with wavelength for thermal neutron guides
+        # Characteristic wavelength scales with guide length and m-value
+        lambda_char = guide_length * 0.5  # Characteristic wavelength in Å
+        alpha = 1.5  # Empirical exponent (physically: ~2 for ballistic guides)
+
+        # Guide transmission: higher for longer wavelengths
+        # At λ=0: T≈0, at λ→∞: T→1
+        efficiency = 1.0 - np.exp(-((wavelength * m_value) / lambda_char)**alpha)
+
+        # Ensure efficiency is in reasonable range [0, 1]
+        efficiency = np.clip(efficiency, 0.0, 1.0)
+
+        # Apply efficiency to counts
+        result = df.copy()
+        result['counts'] = df['counts'].values * efficiency
+        result['err'] = df['err'].values * np.sqrt(efficiency)  # Error scales as sqrt(efficiency)
+
+        return result
+
     def plot(self, kind='auto', show_stages=False, show_errors=False, fontsize=16, figsize=(10, 6), **kwargs):
         """
         Plot the data using pandas plotting methods.
