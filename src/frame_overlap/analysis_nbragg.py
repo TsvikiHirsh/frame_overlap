@@ -5,7 +5,7 @@ This module provides a simplified interface to nbragg for fitting transmission
 models to reconstructed data.
 """
 
-import numpy as pd
+import numpy as np
 import pandas as pd
 
 

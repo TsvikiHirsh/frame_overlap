@@ -32,9 +32,10 @@ The package also provides backward-compatible functional API:
 """
 
 # New object-oriented API
-from .data_class import Data
+from .data_class import Data, frame_starts_to_kernel
 from .reconstruct import Reconstruct
 from .analysis_nbragg import Analysis
+from .forward_fit import ForwardFit
 from .workflow import Workflow
 from .analysis_class import Analysis as LegacyAnalysis, CrossSection
 from .groupby import ParametricScan, compare_configurations

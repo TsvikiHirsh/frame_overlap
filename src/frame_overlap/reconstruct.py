@@ -329,23 +329,40 @@ class Reconstruct:
         if self.data.kernel is None:
             raise ValueError("Data object must have a kernel defined (call data.overlap first)")
 
-        # Store reference data: the signal BEFORE overlap
-        # WORKFLOW: Data → Convolute → Poisson → Overlap
-        # Reference should be poissoned data (if available), before overlap
-        if self.data.poissoned_data is not None:
-            self.reference_data = self.data.poissoned_data.copy()
-        elif self.data.convolved_data is not None:
-            self.reference_data = self.data.convolved_data.copy()
-        else:
-            self.reference_data = self.data.data.copy() if self.data.data is not None else None
+        # Store reference data: the expected single-frame signal BEFORE overlap.
+        # WORKFLOW: Data -> Convolute -> Overlap -> Poisson
+        # With Poisson applied after overlap (correct physics), the pre-overlap
+        # reference is the convolved spectrum scaled by the applied duty cycle
+        # (the deterministic expectation of a single frame's counts).
+        poisson_after_overlap = getattr(self.data, 'poisson_stage', None) == 'after_overlap'
+        duty = getattr(self.data, 'applied_duty_cycle', None) or 1.0
 
-        # Store reference openbeam: openbeam BEFORE overlap
-        if self.data.op_poissoned_data is not None:
-            self.reference_openbeam = self.data.op_poissoned_data.copy()
-        elif self.data.op_convolved_data is not None:
-            self.reference_openbeam = self.data.op_convolved_data.copy()
+        def _scaled_reference(df):
+            ref = df.copy()
+            ref['counts'] = ref['counts'].values * duty
+            ref['err'] = np.sqrt(np.maximum(ref['counts'].values, 1))
+            return ref
+
+        if poisson_after_overlap:
+            src = self.data.convolved_data if self.data.convolved_data is not None else self.data.data
+            self.reference_data = _scaled_reference(src) if src is not None else None
+            op_src = self.data.op_convolved_data if self.data.op_convolved_data is not None else self.data.op_data
+            self.reference_openbeam = _scaled_reference(op_src) if op_src is not None else None
         else:
-            self.reference_openbeam = self.data.op_data.copy() if self.data.op_data is not None else None
+            # Legacy workflow (poisson before overlap)
+            if self.data.poissoned_data is not None:
+                self.reference_data = self.data.poissoned_data.copy()
+            elif self.data.convolved_data is not None:
+                self.reference_data = self.data.convolved_data.copy()
+            else:
+                self.reference_data = self.data.data.copy() if self.data.data is not None else None
+
+            if self.data.op_poissoned_data is not None:
+                self.reference_openbeam = self.data.op_poissoned_data.copy()
+            elif self.data.op_convolved_data is not None:
+                self.reference_openbeam = self.data.op_convolved_data.copy()
+            else:
+                self.reference_openbeam = self.data.op_data.copy() if self.data.op_data is not None else None
 
         kind = kind.lower()
 
@@ -375,29 +392,45 @@ class Reconstruct:
                 raise ValueError(f"Unknown filter kind '{kind}'. "
                                f"Choose from: 'wiener', 'wiener_smooth', 'wiener_adaptive', 'fobi', 'lucy', 'tikhonov'")
 
-        # Scale reconstructed signal by number of frames
-        # The overlap() method normalizes by n_frames, and the kernel uses 1/n_frames
-        # So we need to multiply by n_frames to restore original amplitude
-        n_frames = len(self.data.kernel)
-        reconstructed_signal_scaled = reconstructed_signal * n_frames
+        # No amplitude rescaling is needed: the overlap SUMS frame contributions
+        # and the kernel uses unit deltas (one per frame), so deconvolution
+        # directly recovers the single-frame spectrum.
+        n_boot = kwargs.pop('n_boot', 0)
 
         # Create reconstructed signal DataFrame
+        # NOTE: sqrt(counts) is only a placeholder error; deconvolved bins are
+        # correlated and reshaped by the filter. Use n_boot > 0 for proper
+        # bootstrap error propagation.
         self.reconstructed_data = pd.DataFrame({
             'time': self.data.table['time'].values,
-            'counts': reconstructed_signal_scaled,
-            'err': np.sqrt(np.maximum(reconstructed_signal_scaled, 1))
+            'counts': reconstructed_signal,
+            'err': np.sqrt(np.maximum(reconstructed_signal, 1))
         })
 
+        # Bootstrap error propagation for the signal: apply the same filter to
+        # Poisson replicas of the observed overlapped counts and take the
+        # per-bin standard deviation.
+        if n_boot > 0 and not is_single_frame:
+            self.reconstructed_data['err'] = self._bootstrap_errors(
+                self.data.table, kind, noise_power, n_boot, **kwargs)
+
+        # Determine observed overlapped openbeam (with noise if Poisson was
+        # applied after overlap, which is the correct workflow)
+        poisson_after_overlap = getattr(self.data, 'poisson_stage', None) == 'after_overlap'
+        op_observed = (self.data.op_poissoned_data if poisson_after_overlap
+                       and self.data.op_poissoned_data is not None
+                       else self.data.op_overlapped_data)
+
         # Reconstruct openbeam if available
-        if self.data.op_overlapped_data is not None:
+        if op_observed is not None:
             if is_single_frame:
                 # Single frame: no deconvolution needed for openbeam either
-                reconstructed_ob = self.data.op_overlapped_data['counts'].values.copy()
+                reconstructed_ob = op_observed['counts'].values.copy()
             else:
                 # Multiple frames: apply deconvolution to openbeam
                 # Temporarily swap data to reconstruct openbeam
                 original_table = self.data.table
-                self.data.table = self.data.op_overlapped_data
+                self.data.table = op_observed
 
                 if kind == 'wiener':
                     reconstructed_ob = self._wiener_filter(noise_power, smooth=False, **kwargs)
@@ -415,20 +448,61 @@ class Reconstruct:
                 # Restore original table
                 self.data.table = original_table
 
-            # Scale openbeam by number of frames (same reason as signal)
-            reconstructed_ob_scaled = reconstructed_ob * n_frames
-
             # Create reconstructed openbeam DataFrame
             self.reconstructed_openbeam = pd.DataFrame({
-                'time': self.data.op_overlapped_data['time'].values,
-                'counts': reconstructed_ob_scaled,
-                'err': np.sqrt(np.maximum(reconstructed_ob_scaled, 1))
+                'time': op_observed['time'].values,
+                'counts': reconstructed_ob,
+                'err': np.sqrt(np.maximum(reconstructed_ob, 1))
             })
+
+            if n_boot > 0 and not is_single_frame:
+                self.reconstructed_openbeam['err'] = self._bootstrap_errors(
+                    op_observed, kind, noise_power, n_boot, **kwargs)
 
         # Calculate statistics
         self._calculate_statistics()
 
         return self
+
+    def _bootstrap_errors(self, observed_df, kind, noise_power, n_boot, seed=12345, **kwargs):
+        """
+        Estimate per-bin errors of the deconvolved spectrum by bootstrap.
+
+        Poisson replicas of the observed overlapped counts are passed through
+        the same filter; the per-bin standard deviation of the reconstructions
+        is the (diagonal) error of the deconvolved spectrum. This captures the
+        noise amplification and reshaping of the filter, which sqrt(counts)
+        does not.
+        """
+        rng = np.random.default_rng(seed)
+        original_table = self.data.table
+        recons = []
+        try:
+            for _ in range(n_boot):
+                replica = observed_df.copy()
+                replica['counts'] = rng.poisson(
+                    np.maximum(observed_df['counts'].values, 0)).astype(float)
+                self.data.table = replica
+                if kind == 'wiener':
+                    rec = self._wiener_filter(noise_power, smooth=False, **kwargs)
+                elif kind == 'wiener_smooth':
+                    rec = self._wiener_filter(noise_power, smooth=True, **kwargs)
+                elif kind == 'wiener_adaptive':
+                    rec = self._wiener_adaptive_filter(**kwargs)
+                elif kind == 'fobi':
+                    rec = self._fobi_filter(noise_power, **kwargs)
+                elif kind == 'lucy' or kind == 'richardson-lucy':
+                    rec = self._lucy_richardson_filter(**kwargs)
+                elif kind == 'tikhonov':
+                    rec = self._tikhonov_filter(noise_power, **kwargs)
+                else:
+                    raise ValueError(f"Unknown filter kind '{kind}'")
+                recons.append(rec)
+        finally:
+            self.data.table = original_table
+
+        err = np.std(np.asarray(recons), axis=0, ddof=1)
+        return np.maximum(err, 1e-10)
 
     def _wiener_filter(self, noise_power, smooth=False, smooth_window=5, **kwargs):
         """
@@ -536,7 +610,7 @@ class Reconstruct:
         return x_est
 
     def _fobi_filter(self, noise_power, smooth_window=5, sg_order=1, roll_shift=0,
-                     interpolate_kernel=True, **kwargs):
+                     interpolate_kernel=False, **kwargs):
         """
         Apply FOBI-style Wiener deconvolution (from original FOBI code).
 
@@ -761,6 +835,8 @@ class Reconstruct:
         np.ndarray
             The kernel array (delta functions at frame start positions)
         """
+        from .data_class import frame_starts_to_kernel
+
         if self.data.kernel is None:
             raise ValueError("Kernel not defined in Data object")
 
@@ -770,52 +846,18 @@ class Reconstruct:
         else:
             bin_width = 10  # Default 10 µs
 
-        # Convert kernel from ms to µs and then to bins
+        # Convert kernel from ms to µs and then to cumulative frame starts
         kernel_us = np.array(self.data.kernel) * 1000  # ms to µs
-        frame_starts_us = np.cumsum(kernel_us)  # Cumulative positions
+        frame_starts_us = np.cumsum(kernel_us)
 
-        # Convert to bin indices (fractional for interpolation)
-        frame_starts_bins_float = frame_starts_us / bin_width
-
-        if interpolate:
-            # Official FOBI style: interpolated kernel for sub-bin precision
-            # This distributes intensity across adjacent bins
-            if len(frame_starts_bins_float) > 0:
-                kernel_length = max(int(np.ceil(frame_starts_bins_float[-1])) + 1, 1)
-            else:
-                kernel_length = 1
-
-            kernel = np.zeros(kernel_length)
-            n_frames = len(self.data.kernel)
-
-            for bin_idx_float in frame_starts_bins_float:
-                bin_floor = int(np.floor(bin_idx_float))
-                rest = bin_idx_float - bin_floor
-
-                # Distribute intensity across two adjacent bins
-                if bin_floor < kernel_length:
-                    kernel[bin_floor] += (1.0 - rest) / n_frames
-                if bin_floor + 1 < kernel_length:
-                    kernel[bin_floor + 1] += rest / n_frames
-        else:
-            # Original discrete approach: delta functions at rounded positions
-            frame_starts_bins = np.round(frame_starts_bins_float).astype(int)
-
-            # Create kernel with delta functions at frame start positions
-            if len(frame_starts_bins) > 0:
-                kernel_length = max(frame_starts_bins[-1] + 1, 1)
-            else:
-                kernel_length = 1
-
-            kernel = np.zeros(kernel_length)
-
-            # Place delta functions (value = 1/n_frames for normalization)
-            n_frames = len(self.data.kernel)
-            for bin_idx in frame_starts_bins:
-                if bin_idx < len(kernel):
-                    kernel[bin_idx] = 1.0 / n_frames
-
-        return kernel
+        # Use the SAME kernel construction as Data._create_overlap (circular,
+        # unit deltas summed over frames) so the deconvolution inverts exactly
+        # the operator that produced the overlap. Discrete placement matches
+        # the simulation; interpolate=True is available for real chopper data
+        # with genuinely fractional-bin delays.
+        n_bins = len(self.data.table)
+        return frame_starts_to_kernel(frame_starts_us, bin_width, n_bins,
+                                      interpolate=interpolate)
 
     def _calculate_statistics(self):
         """Calculate reconstruction quality statistics using tmin/tmax range if specified."""
