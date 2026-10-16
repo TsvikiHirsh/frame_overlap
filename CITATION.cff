@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use frame_overlap, please cite the article below and the software."
+title: "frame_overlap: Bragg-edge transmission with programmable pulse patterns and frame overlap, on top of nbragg"
+version: 1.0.0
+authors:
+  - family-names: Hirsh
+    given-names: Tsviki Y.
+    email: tsviki@soreq.gov.il
+repository-code: "https://github.com/TsvikiHirsh/frame_overlap"
+license: MIT
+preferred-citation:
+  type: article
+  title: "Projected precision of Bragg-edge imaging at the SARAF-II time-of-flight facility with programmable pulse patterns"
+  authors:
+    - family-names: Hirsh
+      given-names: Tsviki Y.
+  status: in-preparation

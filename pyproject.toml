@@ -29,6 +29,5 @@ package-dir = {"" = "src"}
 
 [project.urls]
 "Homepage" = "https://github.com/TsvikiHirsh/frame_overlap"
-"Documentation" = "https://tsvikihirsh.github.io/frame_overlap/"
 "Repository" = "https://github.com/TsvikiHirsh/frame_overlap.git"
 "Issues" = "https://github.com/TsvikiHirsh/frame_overlap/issues"
