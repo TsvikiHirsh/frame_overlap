@@ -96,10 +96,16 @@ class Experiment:
         return Measurement(self.grid, y, self.pattern, self.beam, self.time, truth=truth)
 
     def with_pattern(self, pattern):
-        return Experiment(self.sample, self.beam, pattern, self.time, self.background)
+        e = Experiment(self.sample, self.beam, pattern, self.time, self.background)
+        if "_dT" in self.__dict__:          # derivatives do not depend on the pattern
+            e.__dict__["_dT"] = self.__dict__["_dT"]
+        return e
 
     def with_time(self, time):
-        return Experiment(self.sample, self.beam, self.pattern, time, self.background)
+        e = Experiment(self.sample, self.beam, self.pattern, time, self.background)
+        if "_dT" in self.__dict__:
+            e.__dict__["_dT"] = self.__dict__["_dT"]
+        return e
 
     def with_beam(self, beam):
         return Experiment(self.sample, beam, self.pattern, self.time, self.background)

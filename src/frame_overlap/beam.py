@@ -57,6 +57,12 @@ class OpenBeam:
         period over ``n_periods`` periods (counts per bin, starting at the
         pulse). Shorter spectra are extended to the period by an exponential
         fit of their tail (from ``tail_from`` seconds, default 2/3 of the data).
+
+        The fits take the open beam as known, so measure it with much better
+        statistics than the sample (for example summed over a large detector
+        area and scaled with ``scaled``), and with a short pulse: the counts
+        contain the shape of the calibration pulse, which would otherwise be
+        applied twice.
         """
         counts = _extend(grid, counts, tail_from)
         return cls(grid, counts / (pulse_width * n_periods))

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "frame_overlap"
-version = "0.3.1"
-description = "Neutron Time-of-Flight frame overlap analysis with deconvolution and material fitting."
+version = "1.0.0.dev0"
+description = "Bragg-edge transmission with programmable pulse patterns and frame overlap, on top of nbragg."
 authors = [
     { name = "Tsviki Y. Hirsh", email = "tsviki@soreq.gov.il" }
 ]
@@ -16,16 +16,13 @@ dependencies = [
     "pandas>=1.5",
     "scipy>=1.7",
     "matplotlib>=3.5",
-    "lmfit>=1.0",
-    "scikit-image>=0.19",
-    "tqdm>=4.60",
-    "nbragg>=0.5.0"
+    "nbragg>=1.0"
 ]
 license = { text = "MIT" }
-keywords = ["neutron", "tof", "deconvolution", "wiener", "optimization", "frame-overlap", "nbragg"]
+keywords = ["neutron", "time-of-flight", "Bragg edge", "frame overlap", "pulse pattern", "chopper", "Rietveld", "nbragg"]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0", "black", "isort", "sphinx", "sphinx_rtd_theme"]
+dev = ["pytest>=7.0", "jupyter", "nbconvert"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

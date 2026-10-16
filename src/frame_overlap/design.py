@@ -11,14 +11,16 @@ from .pattern import Pattern
 
 
 def _setup(exp, window, knots=None):
+    """Analysis window and derivatives of the transmission at the true values,
+    cached on the experiment (shared by its variants with other patterns)."""
     grid = exp.grid
-    win = Window(grid, *window, knots=knots, tail=exp.sample.transmission(grid))
-    rng = (window[0] - 0.25, window[1] + 0.25)
-    key = (id(exp.sample), id(grid), tuple(window))
+    key = (id(exp.sample), id(grid), tuple(window), None if knots is None else tuple(knots))
     cache = exp.__dict__.setdefault("_dT", {})
     if key not in cache:
-        cache[key] = exp.sample.derivatives(grid, wl_range=rng)
-    return win, cache[key]
+        rng = (window[0] - 0.25, window[1] + 0.25)
+        win = Window(grid, *window, knots=knots, tail=exp.sample.transmission(grid))
+        cache[key] = (win, exp.sample.derivatives(grid, wl_range=rng))
+    return cache[key]
 
 
 def fisher(exp, window=(1.0, 5.0), prior_sigma=1.0, extra=None, knots=None):
@@ -100,9 +102,7 @@ def optimise_pattern(exp, n_pulses, target="strain", width=200e-6, n_restarts=8,
     win, dT = _setup(exp, window)
 
     def sigma(starts):
-        e = exp.with_pattern(Pattern(starts, width))
-        e.__dict__["_dT"] = exp.__dict__["_dT"]
-        F = fisher(e, window)
+        F = fisher(exp.with_pattern(Pattern(starts, width)), window)
         return np.sqrt(np.linalg.inv(F)[j, j])
 
     def valid(x):

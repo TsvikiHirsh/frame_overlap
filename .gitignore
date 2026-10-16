@@ -19,3 +19,4 @@ docs/_build/
 .ipynb_checkpoints/
 __pycache__/
 *.pyc
+notebooks/my_*.csv

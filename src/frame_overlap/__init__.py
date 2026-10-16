@@ -9,8 +9,10 @@ A typical session::
 
     # the material, as in nbragg
     xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
-    model = nbragg.TransmissionModel(xs, response="jorgensen_inv", tof_length=9.0)
+    model = nbragg.TransmissionModel(xs, response="jorgensen_inv", tof_length=9.0, vary_response=False)
     model.params["thickness"].set(value=2.0)
+    model.params["α0"].set(value=3000.0)   # moderator response
+    model.params["β0"].set(value=50.0)
     sample = fo.Sample(model, free=["thickness", "strain"])
 
     # the instrument and the measurement design

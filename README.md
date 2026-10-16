@@ -1,29 +1,22 @@
 # frame_overlap
 
-[![Python](https://img.shields.io/badge/python-3.9%2B-blue)](https://www.python.org)
-[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
-[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-blue)](https://tsvikihirsh.github.io/frame_overlap/)
-[![Streamlit App](https://static.streamlit.io/badges/streamlit_badge_black_white.svg)](https://frame-overlap.streamlit.app)
+**Bragg-edge transmission with programmable pulse patterns and frame overlap, on top of [nbragg](https://github.com/TsvikiHirsh/nbragg).**
 
-A Python package for analyzing neutron Time-of-Flight (ToF) frame overlap data using deconvolution techniques, with advanced **adaptive Bragg edge measurement optimization**.
+`frame_overlap` answers two questions for time-of-flight Bragg-edge imaging at a source whose
+pulses can be shaped, such as a continuous-wave accelerator with a digital chopper:
 
-**📚 [Full Documentation](https://tsvikihirsh.github.io/frame_overlap/)** | **📓 [Examples](notebooks/)** | **🚀 [Quick Start](#quick-start)** | **🎮 [Try the Interactive App](https://frame-overlap.streamlit.app)**
+1. **Which pulse pattern should I use?** One pulse per period, a longer pulse, equally spaced
+   pulses with a bandwidth chopper, or overlapping pulses at chosen times. `frame_overlap`
+   computes the precision every design can reach (the Cramér–Rao bound of the counts) and
+   searches for good pulse times.
+2. **How do I analyse overlapped spectra?** With a *Rietveld fit of the overlapped spectrum*: the
+   nbragg transmission model is passed through the known pulse pattern and fitted to the counts
+   with the Poisson likelihood. It works for any pattern and reaches the information limit of the
+   data. Wiener deconvolution as in frame-overlap Bragg-edge imaging (FOBI) is included for
+   comparison.
 
-## Features
-
-### Frame Overlap Analysis
-✨ **Fluent API** - Chain complete pipeline in one expression
-📊 **Parameter Sweeps** - Automatic optimization with progress tracking
-🔧 **Multi-Frame** - Support 2+ overlapping frames
-📈 **Material Analysis** - Integrated nbragg fitting
-🎯 **Smart Scaling** - Automatic flux scaling by pulse duration
-
-### Adaptive Bragg Edge Measurement (NEW!)
-⚛️ **Bayesian Optimization** - Adaptive chopper pattern design
-🎯 **2-5x Speedup** - Reach target precision faster
-🧠 **Information-Theoretic** - Focus on high-value measurements
-🔄 **Real-Time Adaptation** - Update patterns based on data
-📊 **Performance Metrics** - Compare strategies quantitatively
+You describe the material exactly as in nbragg; `frame_overlap` adds the instrument, the pulse
+pattern and the measurement time.
 
 ## Installation
 
@@ -31,177 +24,83 @@ A Python package for analyzing neutron Time-of-Flight (ToF) frame overlap data u
 pip install git+https://github.com/TsvikiHirsh/frame_overlap.git
 ```
 
-## Quick Start
+Requires Python ≥ 3.9 and nbragg ≥ 1.0 (with NCrystal).
 
-### TL;DR - Complete Pipeline
-
-```python
-from frame_overlap import Workflow
-
-# One chain from data to analysis
-wf = Workflow('signal.csv', 'openbeam.csv', flux=5e6, duration=0.5, freq=20)
-
-result = (wf
-    .convolute(pulse_duration=200)
-    .poisson(flux=1e6, freq=60, measurement_time=30)
-    .overlap(kernel=[0, 25])
-    .reconstruct(kind='wiener', noise_power=0.01)
-    .analyze(xs='iron'))
-
-wf.plot()  # Visualize results
-```
-
-### Parameter Optimization
+## Quick start
 
 ```python
-# Find optimal noise_power
-results = (Workflow('signal.csv', 'openbeam.csv', flux=5e6, duration=0.5, freq=20)
-    .convolute(pulse_duration=200)
-    .poisson(flux=1e6, freq=60, measurement_time=30)
-    .overlap(kernel=[0, 25])
-    .groupby('noise_power', low=0.01, high=0.1, num=20)  # Sweep parameter
-    .reconstruct(kind='wiener')
-    .analyze(xs='iron')
-    .run())  # Shows progress bar!
+import nbragg
+import frame_overlap as fo
 
-# Find best
-best = results.loc[results['redchi2'].idxmin()]
-print(f"Optimal noise_power: {best['noise_power']:.4f}")
+# 1. the material, as in nbragg
+xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
+model = nbragg.TransmissionModel(xs, response="jorgensen_inv", tof_length=9.0, vary_response=False)
+model.params["thickness"].set(value=2.0)                 # cm
+model.params["α0"].set(value=3000.0)                     # moderator response, close to
+model.params["β0"].set(value=50.0)                       # a water moderator
+sample = fo.Sample(model, free=["thickness", "strain"])  # what to determine
+
+# 2. the instrument and the measurement design
+grid = fo.TimeGrid(flight_path=9.0, frequency=20.0, bin_width=10e-6)
+beam = fo.OpenBeam.maxwellian(grid, flux=5e6, area=0.03)          # n/cm²/s, cm²
+pattern = fo.Pattern.times([0, 12.0e-3, 22.3e-3, 35.5e-3], width=200e-6)
+exp = fo.Experiment(sample, beam, pattern, time=8 * 3600)
+
+# 3. what this design can reach
+print(exp.precision())     # Cramér–Rao bound of each parameter (strain in microstrain)
+print(exp.gain())          # time-reduction factor against one 200 µs pulse per period
+
+# 4. simulate a measurement and analyse it
+data = exp.simulate(seed=1)
+result = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample)
+print(result.summary())
+result.plot()
 ```
 
-### Adaptive Bragg Edge Measurement
+## Concepts
 
-```python
-from frame_overlap import (
-    BraggEdgeSample,
-    BraggEdgeMeasurementSystem,
-    AdaptiveEdgeOptimizer,
-    MeasurementTarget
-)
+| Object | What it is |
+|---|---|
+| `TimeGrid` | time bins of one period (flight path, repetition rate, bin width); slow neutrons of one period arrive in the next |
+| `OpenBeam` | open-beam rate of one pulse: from a measured spectrum (`from_counts`, `from_reference`) or a thermal moderator model (`maxwellian`); `with_band` adds an ideal bandwidth chopper |
+| `Pattern` | the pulse pattern ("kernel"): `single`, `equal`, `times`, `random`, `maximum_length`, `quadratic_residue`, `poldi`, or `optimise_pattern` |
+| `Sample` | an nbragg `TransmissionModel` with free parameters; `"strain"` moves all Bragg edges by Δλ/λ smoothly (nbragg passes lattice parameters with four decimals) |
+| `Experiment` | sample + open beam + pattern + time; `expected_counts`, `simulate`, `precision`, `gain` |
+| `Measurement` | counts of a measurement with its pattern and open beam (simulated or your own data) |
+| `RietveldFit` | forward fit of the counts through the pattern (Poisson likelihood); nbragg inside an analysis window, a free transmission outside it |
+| `WienerFit` | FOBI-style deconvolution of sample and open beam with the same filter, then a fit of their ratio |
+| `precision`, `gain`, `survey`, `optimise_pattern`, `monte_carlo`, `pattern_bias` | design tools |
 
-# Create iron sample with strain
-sample = BraggEdgeSample.create_iron_sample(strain=0.001)
+The expected counts of a design are μ(t) = n_periods · [c ⊛ (o T)](t): the open time c of the
+pattern in each bin, convolved over the period with the open beam o of one pulse times the
+sample transmission T.
 
-# Set up measurement system
-system = BraggEdgeMeasurementSystem(
-    flight_path=10.0,  # meters
-    wavelength_range=(3.0, 5.0)  # Angstrom
-)
+## Tutorials
 
-# Define measurement target
-target = MeasurementTarget(
-    material='Fe',
-    expected_edge=4.05,  # Angstrom
-    precision_required=0.005,  # 5 milliAngstrom
-    max_measurement_time=300.0  # seconds
-)
+Jupyter notebooks in [`notebooks/`](notebooks/), all on simulated data:
 
-# Run adaptive optimization
-optimizer = AdaptiveEdgeOptimizer(system, target, strategy='bayesian')
-adaptive_result, uniform_result = optimizer.simulate_comparison(
-    sample, flux=1e6, measurement_time_per_pattern=10.0
-)
+1. [`01_quickstart.ipynb`](notebooks/01_quickstart.ipynb): one measurement from model to fit, Rietveld fit against Wiener deconvolution.
+2. [`02_choosing_a_pulse_pattern.ipynb`](notebooks/02_choosing_a_pulse_pattern.ipynb): precision and gain of pulse patterns, bandwidth chopper, optimisation.
+3. [`03_fitting_your_measurement.ipynb`](notebooks/03_fitting_your_measurement.ipynb): load measured counts, open beam and pattern, fit, check the result.
+4. [`04_what_must_be_known.ipynb`](notebooks/04_what_must_be_known.ipynb): how well the pulse pattern, the normalisation and the edge shape must be known.
 
-# Compare results
-speedup = uniform_result.measurement_time / adaptive_result.measurement_time
-print(f"Speedup: {speedup:.2f}x faster")
-print(f"Measured strain: {adaptive_result.strain*1e6:.1f} microstrain")
-```
+## Validation
 
-#### Interactive Demo App
-
-Try the adaptive Bragg edge measurement demo:
-
-```bash
-streamlit run streamlit_adaptive_bragg.py
-```
-
-## Processing Pipeline
-
-```
-Data → Convolute → Poisson → Overlap → Reconstruct → Analysis
-        ↓           ↓          ↓          ↓           ↓
-    Instrument  Add noise  Frame ops  Recover     Material
-     response   (+flux              signal      fitting
-                scaling)
-```
-
-**Key**: Convolute **before** Poisson! The `pulse_duration` defines flux scaling.
-
-## Documentation
-
-📚 **[Full Documentation](https://tsvikihirsh.github.io/frame_overlap/)**
-
-- [Installation Guide](https://tsvikihirsh.github.io/frame_overlap/installation.html)
-- [Quick Start](https://tsvikihirsh.github.io/frame_overlap/quickstart.html)
-- [Workflow Guide](https://tsvikihirsh.github.io/frame_overlap/workflow_guide.html)
-- [API Reference](https://tsvikihirsh.github.io/frame_overlap/api/workflow.html)
-
-## Examples
-
-📓 **[Example Notebooks](notebooks/)**
-
-### Frame Overlap Analysis
-- [Basic Workflow](notebooks/example_1_basic_workflow.ipynb) - Complete pipeline
-- [Parameter Optimization](notebooks/example_2_parameter_optimization.ipynb) - Find optimal parameters
-- [Multi-Frame Overlap](notebooks/example_3_multi_frame_overlap.ipynb) - 3-4 frame setups
-- [Reconstruction Methods](notebooks/example_4_reconstruction_methods.ipynb) - Compare algorithms
-
-### Adaptive Bragg Edge Measurement
-- [Adaptive Optimization](notebooks/example_adaptive_bragg_edge.ipynb) - Complete guide to adaptive measurements
-
-## Main Classes
-
-### Frame Overlap Analysis
-**`Workflow`** - Complete pipeline with method chaining and parameter sweeps
-**`Data`** - Load and process ToF data
-**`Reconstruct`** - Deconvolution (Wiener, Lucy-Richardson, Tikhonov)
-**`Analysis`** - Material fitting with nbragg
-
-### Adaptive Bragg Edge Measurement
-**`BraggEdgeMeasurementSystem`** - Complete measurement system with TOF calibration
-**`AdaptiveEdgeOptimizer`** - Bayesian optimization for adaptive measurements
-**`BraggEdgeSample`** - Sample model with multiple Bragg edges
-**`PatternLibrary`** - Collection of chopper pattern generation strategies
-**`PerformanceEvaluator`** - Tools for evaluating measurement strategies
-
-See [API Reference](https://tsvikihirsh.github.io/frame_overlap/api/workflow.html) for details.
-
-## Requirements
-
-- Python 3.9+
-- numpy, pandas, matplotlib, scipy, scikit-image, tqdm
-
-Optional: nbragg (for analysis), lmfit (for optimization), jupyter (for notebooks)
+`pytest -q` runs tests with known answers: noiseless round trips of the Rietveld fit for one,
+two and four pulses, the doubling of information by two separate pulses, the Wiener ratio for
+a pattern with spectral zeros, and the bias from an error in the assumed pattern. The method and
+its validation against Monte Carlo are described in the article below.
 
 ## Citation
 
-If you use this package, please cite:
+T. Y. Hirsh et al., *Projected precision of Bragg-edge imaging at the SARAF-II time-of-flight
+facility with programmable pulse patterns* (in preparation). Please also cite nbragg and NCrystal.
 
-```bibtex
-@software{frame_overlap,
-  title = {frame_overlap: Neutron ToF Frame Overlap Analysis},
-  author = {Hirsh, Tsviki and contributors},
-  year = {2025},
-  url = {https://github.com/TsvikiHirsh/frame_overlap}
-}
-```
+## History
 
-## Deployment
-
-The interactive Streamlit app can be deployed to Streamlit Cloud. See [DEPLOYMENT.md](DEPLOYMENT.md) for:
-- Deployment instructions
-- nbragg installation troubleshooting
-- Graceful fallback behavior when dependencies are unavailable
-
-**Live App**: https://frame-overlap.streamlit.app
+Version 1.0 replaces the earlier deconvolution-centred package; the old code, notebooks and
+apps are kept in [`legacy/`](legacy/) and are no longer installed.
 
 ## License
 
-MIT License - see [LICENSE](LICENSE) file
-
-## Links
-
-- **Documentation**: https://tsvikihirsh.github.io/frame_overlap/
-- **Repository**: https://github.com/TsvikiHirsh/frame_overlap
-- **Issues**: https://github.com/TsvikiHirsh/frame_overlap/issues
+MIT
