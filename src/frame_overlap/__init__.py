@@ -1,145 +1,43 @@
 """
-frame_overlap - Neutron Time-of-Flight Frame Overlap Analysis
+frame_overlap: Bragg-edge transmission with programmable pulse patterns and
+frame overlap, on top of nbragg.
 
-This package provides tools for analyzing frame overlap in neutron ToF data
-using deconvolution techniques. It features a modern object-oriented API
-with support for data processing, reconstruction, and analysis.
+A typical session::
 
-Main Classes
-------------
-Data : Load and process neutron ToF data with convolution and frame overlap
-Reconstruct : Apply various deconvolution filters to reconstruct signals
-Analysis : Fit reconstructed data to extract material parameters
-Workflow : High-level interface for method chaining and parameter sweeps
-ParametricScan : Perform parametric scans over processing parameters
+    import nbragg
+    import frame_overlap as fo
 
-Adaptive Bragg Edge Measurement
---------------------------------
-BraggEdgeMeasurementSystem : Complete measurement system with TOF calibration
-AdaptiveEdgeOptimizer : Bayesian optimization for adaptive measurements
-BraggEdgeSample : Sample model with multiple Bragg edges
-IncidentSpectrum : Incident neutron spectrum models
-PatternLibrary : Collection of chopper pattern generation strategies
-PerformanceEvaluator : Tools for evaluating measurement strategies
+    # the material, as in nbragg
+    xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
+    model = nbragg.TransmissionModel(xs, response="jorgensen_inv", tof_length=9.0)
+    model.params["thickness"].set(value=2.0)
+    sample = fo.Sample(model, free=["thickness", "strain"])
 
-Legacy Functions
-----------------
-The package also provides backward-compatible functional API:
-- read_tof_data, prepare_full_frame
-- wiener_deconvolution, generate_kernel, apply_filter
-- chi2_analysis, optimize_parameters
-- plot_analysis
+    # the instrument and the measurement design
+    grid = fo.TimeGrid(flight_path=9.0, frequency=20.0, bin_width=10e-6)
+    beam = fo.OpenBeam.maxwellian(grid, flux=5e6, area=0.03)
+    exp = fo.Experiment(sample, beam, fo.Pattern.times([0, 12e-3, 22.3e-3, 35.5e-3]), time=8 * 3600)
+
+    # what the design can reach, and how a measurement is analysed
+    exp.precision()                       # Cramer-Rao bound of each parameter
+    exp.gain()                            # time-reduction factor against one pulse per period
+    data = exp.simulate(seed=1)
+    result = fo.RietveldFit(window=(1, 5)).fit(data, sample)
+    print(result.summary())
+
+Main objects: TimeGrid, OpenBeam, Pattern, Sample, Experiment, Measurement,
+RietveldFit, WienerFit; design tools: precision, gain, survey,
+optimise_pattern, monte_carlo, pattern_bias.
 """
+from .grid import TimeGrid, time_to_wavelength, wavelength_to_time
+from .beam import OpenBeam
+from .pattern import Pattern
+from .sample import Sample
+from .experiment import Experiment, Measurement
+from .fitting import RietveldFit, WienerFit, FitResult, Window
+from .design import fisher, precision, gain, survey, optimise_pattern, monte_carlo, pattern_bias
 
-# New object-oriented API
-from .data_class import Data, frame_starts_to_kernel
-from .reconstruct import Reconstruct
-from .analysis_nbragg import Analysis
-from .forward_fit import ForwardFit
-from .workflow import Workflow
-from .analysis_class import Analysis as LegacyAnalysis, CrossSection
-from .groupby import ParametricScan, compare_configurations
-
-# Adaptive Bragg Edge Measurement API
-from .bragg_edge_model import (
-    BraggEdge,
-    BraggEdgeSample,
-    IncidentSpectrum,
-    TOFCalibration,
-    MeasurementSimulator
-)
-from .chopper_patterns import PatternLibrary, ForwardModel
-from .adaptive_measurement import (
-    BayesianEdgeOptimizer,
-    GradientFocusedMeasurement,
-    MultiResolutionEdgeSearch,
-    RealTimeAdaptiveSystem,
-    EdgePosterior
-)
-from .bragg_edge_optimizer import (
-    BraggEdgeMeasurementSystem,
-    AdaptiveEdgeOptimizer,
-    MeasurementTarget,
-    OptimizationResult,
-    optimize_measurement_strategy
-)
-from .performance_metrics import (
-    PerformanceEvaluator,
-    PerformanceMetrics,
-    ComparisonResult
-)
-from .two_stage_measurement import (
-    TwoStageMeasurementStrategy,
-    OpenbeamMeasurement,
-    TwoStageResult,
-    OpenbeamLibrary,
-    estimate_openbeam_time_savings
-)
-from .tof_offset_correction import (
-    TOFOffsetCorrector,
-    OffsetCorrectionResult,
-    apply_offset_correction_to_workflow,
-    estimate_expected_offset
-)
-
-# Legacy functional API (for backward compatibility)
-from .data import read_tof_data, prepare_full_frame
-from .analysis import wiener_deconvolution, generate_kernel, apply_filter
-from .optimization import chi2_analysis, optimize_parameters, deconvolution_model
-from .visualization import plot_analysis
-
-__all__ = [
-    # New OOP API
-    'Data',
-    'Reconstruct',
-    'Analysis',
-    'Workflow',
-    'LegacyAnalysis',
-    'CrossSection',
-    'ParametricScan',
-    'compare_configurations',
-
-    # Adaptive Bragg Edge API
-    'BraggEdge',
-    'BraggEdgeSample',
-    'IncidentSpectrum',
-    'TOFCalibration',
-    'MeasurementSimulator',
-    'PatternLibrary',
-    'ForwardModel',
-    'BayesianEdgeOptimizer',
-    'GradientFocusedMeasurement',
-    'MultiResolutionEdgeSearch',
-    'RealTimeAdaptiveSystem',
-    'EdgePosterior',
-    'BraggEdgeMeasurementSystem',
-    'AdaptiveEdgeOptimizer',
-    'MeasurementTarget',
-    'OptimizationResult',
-    'optimize_measurement_strategy',
-    'PerformanceEvaluator',
-    'PerformanceMetrics',
-    'ComparisonResult',
-    'TwoStageMeasurementStrategy',
-    'OpenbeamMeasurement',
-    'TwoStageResult',
-    'OpenbeamLibrary',
-    'estimate_openbeam_time_savings',
-    'TOFOffsetCorrector',
-    'OffsetCorrectionResult',
-    'apply_offset_correction_to_workflow',
-    'estimate_expected_offset',
-
-    # Legacy functional API
-    'read_tof_data',
-    'prepare_full_frame',
-    'wiener_deconvolution',
-    'generate_kernel',
-    'apply_filter',
-    'chi2_analysis',
-    'optimize_parameters',
-    'deconvolution_model',
-    'plot_analysis',
-]
-
-__version__ = '0.3.1'
+__version__ = "1.0.0.dev0"
+__all__ = ["TimeGrid", "time_to_wavelength", "wavelength_to_time", "OpenBeam", "Pattern", "Sample",
+           "Experiment", "Measurement", "RietveldFit", "WienerFit", "FitResult", "Window", "fisher",
+           "precision", "gain", "survey", "optimise_pattern", "monte_carlo", "pattern_bias"]

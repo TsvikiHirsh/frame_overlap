@@ -14,3 +14,8 @@ ENV/
 .venv
 dist/
 docs/_build/
+
+# notebooks and caches
+.ipynb_checkpoints/
+__pycache__/
+*.pyc
