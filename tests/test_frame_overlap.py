@@ -118,3 +118,22 @@ def test_pattern_bias(setup):
     assert all(abs(v) < 1e-6 for v in same.values())
     late = fo.pattern_bias(exp, fo.Pattern.times(p.starts + 1e-6))
     assert late["strain"] > 0.5                         # a common delay looks like a longer wavelength
+
+
+def test_optimise_two_pulses(setup):
+    """Two pulses: the best second pulse is where the spectra do not overlap (R = 2)."""
+    sample, grid, beam = setup
+    exp = fo.Experiment(sample, beam, fo.Pattern.single(200e-6), time=8 * 3600)
+    best = fo.optimise_pattern(exp, 2, target="strain", n_restarts=2, n_steps=300, seed=1)
+    R = exp.with_pattern(best).gain()
+    assert R["strain"] > 1.95 and not best.overlaps(grid.period)
+
+
+def test_survey_and_monte_carlo(setup):
+    sample, grid, beam = setup
+    exp = fo.Experiment(sample, beam, fo.Pattern.single(200e-6), time=8 * 3600)
+    table = fo.survey(exp, {"one": fo.Pattern.single(200e-6), "two": fo.Pattern.equal(2, period=grid.period)})
+    assert np.isclose(table.R_strain.iloc[0], 1.0) and table.R_strain.iloc[1] > 1.9
+    est, summary = fo.monte_carlo(exp, fo.RietveldFit(), n=6, seed=3)
+    assert summary.n_ok.iloc[0] == 6
+    assert np.all(np.abs(summary.bias / summary.bound) < 3)
