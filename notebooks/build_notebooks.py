@@ -69,17 +69,26 @@ data.plot(a1)
 a0.set_xlabel("")
 plt.show()'''),
     md("## Rietveld fit of the overlapped spectrum"),
-    code('''rietveld = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample)
-print(rietveld.summary())
+    md("""The fit starts away from the truth (here 1.9 cm and 300 microstrain);
+the greys show the contribution of each pulse to the fitted counts."""),
+    code('''rietveld = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample, theta0=[1.9, 3e-4])
+print(rietveld.fit_report())
 fig, ax = plt.subplots(figsize=(7, 3))
 rietveld.plot(ax)
-for k, part in enumerate(rietveld.extra["contributions"]):
-    ax.fill_between(grid.t * 1e3, 0, part, alpha=0.25, label=f"pulse {k + 1}")
-ax.legend(ncol=3)
+plt.show()'''),
+    md("""The fit also recovers the transmission spectrum: the counts of each bin
+are divided between the pulses in proportion to their fitted contributions,
+as Rietveld programs divide the counts of overlapping reflections."""),
+    code('''lam, T, dT = rietveld.transmission()
+sel = (lam > 1) & (lam < 5)
+fig, ax = plt.subplots(figsize=(7, 3))
+ax.plot(lam[sel], T[sel], color="0.5", lw=0.4, label="recovered from the overlapped counts")
+ax.plot(lam[sel], sample.transmission(grid)[sel], color="#0072B2", lw=1, label="nbragg model (truth)")
+ax.set_xlabel("Wavelength (Å)"); ax.set_ylabel("Transmission"); ax.legend()
 plt.show()'''),
     md("## Wiener deconvolution (FOBI)"),
-    code('''wiener = fo.WienerFit(noise_power=1e-3).fit(data, sample)
-print(wiener.summary())
+    code('''wiener = fo.WienerFit(noise_power=1e-3).fit(data, sample, theta0=[1.9, 3e-4])
+print(wiener.fit_report())
 fig, ax = plt.subplots(figsize=(7, 3))
 wiener.plot(ax)
 ax.set_ylim(-0.05, 0.4)
@@ -93,6 +102,14 @@ bound = exp4.precision().set_index("parameter").sigma
 pd.DataFrame({"Cramer-Rao bound": bound,
               "Rietveld fit": pd.Series(rietveld.errors),
               "Wiener deconvolution": pd.Series(wiener.errors)})'''),
+    md("""## Check with a Monte Carlo
+
+The errors above come from the curvature of the likelihood. A Monte Carlo of
+simulated measurements, each fitted from displaced starting values, checks
+that the scatter of the results matches them and that the fit is unbiased.
+Use more draws (and ``workers``) for a real check."""),
+    code('''est, mc = fo.monte_carlo(exp4, fo.RietveldFit(), n=24, seed=0, workers=4)
+mc.round(6)'''),
 ]
 
 NB["02_choosing_a_pulse_pattern"] = [
@@ -109,37 +126,33 @@ together. This notebook compares, for N pulses of 200 µs per 50 ms period:
 
 All numbers are Cramér–Rao bounds of the Rietveld fit, which reaches them."""),
     code(SETUP),
-    code('''exp = fo.Experiment(sample, beam, fo.Pattern.single(200e-6), time=hours * 3600)
-LAM_PER_S = grid.wavelength_at(1.0)        # Angstrom per second of flight
-
-def bandwidth_beam(n, lo=0.97, hi=5.25, last_edge=4.55):
-    """Ideal bandwidth chopper: each pulse keeps a band that fits between pulses."""
-    width = (grid.period / n - 250e-6) * LAM_PER_S
-    if lo + width >= hi:
-        return beam.with_band(lo, hi)
-    top = max(lo + width, last_edge)
-    return beam.with_band(max(lo, top - width), top)
-
-ref = exp.precision().set_index("parameter").sigma          # one 200 us pulse, no chopper
-
-def R(e):
-    """time-reduction factor of a design against one 200 us pulse per period"""
-    return dict((ref / e.precision().set_index("parameter").sigma) ** 2)
-
-rows = []
+    md("""The reference is one 200 µs pulse per period without a bandwidth
+chopper. ``gain`` gives the time-reduction factor of a design against it, and
+``survey`` does the same for many designs at once."""),
+    code('''one = fo.Experiment(sample, beam, fo.Pattern.single(200e-6), time=hours * 3600)
+print(one.precision())
+fo.survey(one, {"one pulse": fo.Pattern.single(200e-6),
+                "two pulses, 0 and 25 ms": fo.Pattern.times([0, 25e-3]),
+                "POLDI-like sequence": fo.Pattern.poldi(grid=grid)}).round(3)'''),
+    md("""A bandwidth chopper passes only part of each spectrum, so that the
+spectra of N equally spaced pulses do not overlap. ``with_band_for(n)`` gives
+the open beam of such a chopper: the band 0.97–5.25 Å while it fits between
+the pulses, otherwise the widest band that still reaches 4.55 Å, just beyond
+the (110) edge of iron."""),
+    code('''rows = []
 for n in [1, 2, 4, 8]:
     designs = {"one longer pulse": fo.Pattern([0.0], n * 200e-6),
-               "equal, no chopper": fo.Pattern.equal(n, period=grid.period),
-               "random times": fo.Pattern.random(n, period=grid.period, seed=n)}
+               "equal, no chopper": fo.Pattern.equal(n, grid=grid),
+               "random times": fo.Pattern.random(n, grid=grid, seed=n)}
     if n in (2, 4, 8):
-        designs["maximum-length sequence"] = fo.Pattern.maximum_length({2: 2, 4: 3, 8: 4}[n], period=grid.period)
+        designs["maximum-length sequence"] = fo.Pattern.maximum_length({2: 2, 4: 3, 8: 4}[n], grid=grid)
     for name, p in designs.items():
-        rows.append(dict(N=n, design=name, **R(exp.with_pattern(p))))
-    eb = fo.Experiment(sample, bandwidth_beam(n), fo.Pattern.equal(n, period=grid.period), time=hours * 3600)
-    rows.append(dict(N=n, design="equal, bandwidth chopper", **R(eb)))
+        rows.append(dict(N=n, design=name, **one.with_pattern(p).gain(reference=one)))
+    chopped = one.with_beam(beam.with_band_for(n)).with_pattern(fo.Pattern.equal(n, grid=grid))
+    rows.append(dict(N=n, design="equal, bandwidth chopper", **chopped.gain(reference=one)))
     if n > 1:
-        best = fo.optimise_pattern(exp, n, target="strain", n_restarts=2, n_steps=400, seed=n)
-        rows.append(dict(N=n, design="optimised for strain", **R(exp.with_pattern(best))))
+        best = fo.optimise_pattern(one, n, target="strain", n_restarts=2, n_steps=400, seed=n)
+        rows.append(dict(N=n, design="optimised for strain", **one.with_pattern(best).gain(reference=one)))
 import pandas as pd
 table = pd.DataFrame(rows)
 table.pivot(index="N", columns="design", values="strain").round(2)'''),
@@ -153,10 +166,17 @@ axes[0].set_ylabel("time-reduction factor R")
 axes[1].legend(fontsize=8)
 plt.show()'''),
     md("""With a bandwidth chopper the pulses do not overlap and R grows with N as
-long as the band needed for the edges fits between pulses. Without it, the
-spectra overlap; optimised pulse times keep the thermal peak of each pulse
-away from the edges of the others and still give a gain of about four for the
-strain. A longer pulse helps the thickness but not the edge position."""),
+long as the band needed for the edges fits between pulses; beyond that the
+narrower band keeps gaining for the strain only if the edge shape is known.
+Without a chopper the spectra overlap, and optimised pulse times keep the
+thermal peak of each pulse away from the edges of the others. Pseudorandom
+sequences are designed for an inversion with the least noise, which the
+Rietveld fit does not need. A longer pulse helps the thickness but not the
+edge position.
+
+The optimiser is a stochastic search: more restarts and steps can find
+better patterns. ``optimise_pattern(..., target="thickness")`` optimises for
+the thickness instead."""),
 ]
 
 NB["03_fitting_your_measurement"] = [
@@ -187,21 +207,28 @@ print("written two CSV files")'''),
     md("## Read the data and fit"),
     code('''counts = pd.read_csv("my_sample_counts.csv").counts.values
 ob = pd.read_csv("my_open_beam_one_pulse.csv").counts.values
-open_beam = fo.OpenBeam.from_counts(grid, ob, pulse_width=10e-6, n_periods=8 * 3600 * grid.frequency).scaled(1 / 100)
+open_beam = fo.OpenBeam.from_counts(grid, ob, pulse_width=10e-6, time=8 * 3600).scaled(1 / 100)
 data = fo.Measurement(grid, counts, pattern, open_beam, time=hours * 3600)
-result = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample)
-print(result.summary())'''),
+result = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample)     # starts from the sample's 2.0 cm
+print(result.fit_report())
+result.to_dataframe()'''),
     md("""## Check the fit
 
 The deviance per bin should be close to one, and the residuals should look
 like noise. The true thickness of the simulation was 1.95 cm."""),
-    code('''from frame_overlap.fitting import _dev_resid
-r, _ = _dev_resid(data.counts, result.extra["model_counts"])
-fig, ax = plt.subplots(figsize=(7, 2.5))
-ax.plot(grid.t * 1e3, r, lw=0.3, color="k")
+    code('''fig, ax = plt.subplots(figsize=(7, 2.5))
+ax.plot(grid.t * 1e3, result.residuals(), lw=0.3, color="k")
 ax.set_xlabel("Time in the period (ms)"); ax.set_ylabel("deviance residual")
 plt.show()
-print("deviance per bin:", round(result.deviance / grid.n_bins, 3))'''),
+print("deviance per bin:", round(result.deviance / result.n_used, 3))'''),
+    md("""## A background
+
+A constant count background (room background, detector noise) can be given
+to the Measurement if it is known (``background=``, counts per bin and
+second), or fitted. Here the simulated data have none, and the fitted value
+is consistent with zero."""),
+    code('''with_bg = fo.RietveldFit(window=(1.0, 5.0), fit_background=True).fit(data, sample)
+print(with_bg.fit_report())'''),
     md("""The fit treats the open beam as exact. Its own noise adds to the
 uncertainty of the result, so check its effect, for example by refitting with
 the open beam of half the calibration data, and keep its statistics well
@@ -222,13 +249,18 @@ cases = {
     "all pulses 1 us late (time zero)": fo.Pattern(pattern.starts + 1e-6, 200e-6),
     "one pulse 1 % stronger, same total": fo.Pattern(pattern.starts, 200e-6, intensity=[1.01, 1 - 0.01 / 3, 1 - 0.01 / 3, 1 - 0.01 / 3]),
     "all pulses 1 % stronger (normalisation)": fo.Pattern(pattern.starts, 200e-6, intensity=1.01),
-    "pulses 1 % wider": fo.Pattern(pattern.starts, 202e-6, intensity=200 / 202),
+    "pulses 1 % wider, same centre and neutrons": fo.Pattern((pattern.starts - 1e-6) % grid.period, 202e-6, intensity=200 / 202),
+    "pulses 1 % longer, same start": fo.Pattern(pattern.starts, 202e-6),
 }
 import pandas as pd
 pd.DataFrame({k: fo.pattern_bias(exp, p) for k, p in cases.items()}).T.round(2)'''),
     md("""The table gives the bias in units of the standard deviation of each
 parameter. Pulse times matter for the strain (a digital chopper sets them to
-far better than a microsecond); intensities matter for the thickness.
+far better than a microsecond), and a common delay is a time-zero error of any
+time-of-flight measurement, which cancels in strain measured against a
+reference sample. A pulse that ends later moves its centre and acts like a
+delay of half the change; a pulse that is wider about the same centre hardly
+matters. The normalisation matters for the thickness.
 
 ## The cost of freeing what is assumed known"""),
     code('''model_r = nbragg.TransmissionModel(xs, response="jorgensen_inv", tof_length=9.0, vary_response=True)
@@ -244,7 +276,15 @@ for name, free in {"thickness, strain": ["thickness", "strain"],
 pd.DataFrame(rows).T'''),
     md("""Freeing the normalisation costs most of the thickness precision, and
 freeing the moderator response costs most of the strain precision: both should
-be calibrated in separate measurements."""),
+be calibrated in separate measurements.
+
+The background, a common time offset and the relative pulse intensities can
+also be treated as unknown, in the bound and in ``RietveldFit``
+(``fit_background``, ``fit_t0``, ``fit_intensities``):"""),
+    code('''pd.DataFrame({"known": exp.precision().set_index("parameter").sigma,
+              "+ background": exp.precision(background=True).set_index("parameter").sigma,
+              "+ time offset": exp.precision(t0=True).set_index("parameter").sigma,
+              "+ pulse intensities": exp.precision(intensities=True).set_index("parameter").sigma}).T'''),
 ]
 
 

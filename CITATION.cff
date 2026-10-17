@@ -1,17 +1,40 @@
 cff-version: 1.2.0
 message: "If you use frame_overlap, please cite the article below and the software."
 title: "frame_overlap: Bragg-edge transmission with programmable pulse patterns and frame overlap, on top of nbragg"
-version: 1.0.0
+version: 1.0.0.dev0
+abstract: >-
+  Design and analysis of time-of-flight Bragg-edge transmission measurements
+  with several pulses per period: precision (Cramer-Rao bound) and
+  time-reduction factor of pulse patterns, bandwidth choppers, a Rietveld fit
+  of overlapped spectra through the known pulse pattern, Wiener deconvolution
+  as in FOBI, Monte Carlo validation and pattern optimisation, with the
+  material model from nbragg.
 authors:
   - family-names: Hirsh
     given-names: Tsviki Y.
+    affiliation: Soreq Nuclear Research Center
     email: tsviki@soreq.gov.il
 repository-code: "https://github.com/TsvikiHirsh/frame_overlap"
 license: MIT
+keywords: [neutron imaging, Bragg edge, time of flight, frame overlap, chopper, nbragg]
 preferred-citation:
   type: article
   title: "Projected precision of Bragg-edge imaging at the SARAF-II time-of-flight facility with programmable pulse patterns"
   authors:
     - family-names: Hirsh
       given-names: Tsviki Y.
+    - family-names: Mishnayot
+      given-names: Yonatan
+    - family-names: Eliach
+      given-names: Eliezer
+    - family-names: Maudi
+      given-names: Liran
+    - family-names: Tessler
+      given-names: Moshe
+    - family-names: Long
+      given-names: Alexander M.
+    - family-names: Losko
+      given-names: Adrian S.
+    - family-names: Vogel
+      given-names: Sven C.
   status: in-preparation

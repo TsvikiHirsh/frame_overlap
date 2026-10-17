@@ -62,7 +62,7 @@ result.plot()
 | Object | What it is |
 |---|---|
 | `TimeGrid` | time bins of one period (flight path, repetition rate, bin width); slow neutrons of one period arrive in the next |
-| `OpenBeam` | open-beam rate of one pulse: from a measured spectrum (`from_counts`, `from_reference`) or a thermal moderator model (`maxwellian`); `with_band` adds an ideal bandwidth chopper |
+| `OpenBeam` | open-beam rate of one pulse: from a measured spectrum (`from_counts`, `from_reference`) or a thermal moderator model (`maxwellian`); `with_band` adds an ideal bandwidth chopper, `with_band_for(n)` the widest band that fits between n equally spaced pulses |
 | `Pattern` | the pulse pattern ("kernel"): `single`, `equal`, `times`, `random`, `maximum_length`, `quadratic_residue`, `poldi`, or `optimise_pattern` |
 | `Sample` | an nbragg `TransmissionModel` with free parameters; `"strain"` moves all Bragg edges by Δλ/λ smoothly (nbragg passes lattice parameters with four decimals) |
 | `Experiment` | sample + open beam + pattern + time; `expected_counts`, `simulate`, `precision`, `gain` |
@@ -73,7 +73,38 @@ result.plot()
 
 The expected counts of a design are μ(t) = n_periods · [c ⊛ (o T)](t): the open time c of the
 pattern in each bin, convolved over the period with the open beam o of one pulse times the
-sample transmission T.
+sample transmission T. Times are in seconds, wavelengths in Å, thicknesses in cm.
+
+## Your own data
+
+```python
+open_beam = fo.OpenBeam.from_counts(grid, open_counts, pulse_width=10e-6, time=8 * 3600)
+data = fo.Measurement(grid, sample_counts, pattern, open_beam, time=8 * 3600)
+result = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample)
+result.to_dataframe()          # values and errors (strain also in microstrain)
+result.residuals()             # deviance residuals of the counts
+result.transmission()          # transmission recovered from the overlapped counts
+```
+
+`sample_counts` are the counts of one period (summed over all periods), `open_counts` the open
+beam measured with one short pulse per period and much better statistics (for example summed
+over the detector). A constant background, a common time offset and the relative pulse
+intensities can be fitted as well (`fit_background`, `fit_t0`, `fit_intensities`), and
+`exp.precision(background=True, t0=True, intensities=True)` gives what that costs.
+
+## What to watch
+
+* **The pulse pattern, the normalisation and the moderator response are taken as known.**
+  Tutorial 04 shows how errors in them bias the result and what fitting them costs.
+* **The precision of a design is realised only if the transmission model describes the data at
+  that level.** In the article, with the measured transmission of iron as the truth, designs
+  that only add neutrons to the same spectrum (separate spectra over the full band) kept their
+  gain, and eight optimised overlapping pulses kept theirs for the edge position, while longer
+  pulses and narrow chopper bands moved with the model errors inside the analysis window. The
+  free transmission outside the window protects the fit from model errors there.
+* `optimise_pattern` is a stochastic search: more restarts and steps can find better patterns.
+* `monte_carlo(..., workers=n)` runs in parallel by forking (Linux, macOS); elsewhere it runs
+  serially.
 
 ## Tutorials
 
@@ -86,10 +117,13 @@ Jupyter notebooks in [`notebooks/`](notebooks/), all on simulated data:
 
 ## Validation
 
-`pytest -q` runs tests with known answers: noiseless round trips of the Rietveld fit for one,
-two and four pulses, the doubling of information by two separate pulses, the Wiener ratio for
-a pattern with spectral zeros, and the bias from an error in the assumed pattern. The method and
-its validation against Monte Carlo are described in the article below.
+`pytest -q tests` runs tests with known answers: noiseless round trips of the Rietveld fit for
+one, two and four pulses (the truth within 0.1 standard deviations, the remainder from the
+straight lines of the free transmission between knots), a fitted background, the doubling of
+information by two separate pulses, R = 4 for four pulses with a bandwidth chopper, the Wiener
+ratio for a pattern with spectral zeros, the bias from an error in the assumed pattern, pattern
+optimisation, and serial and parallel Monte Carlo. The method and its validation against Monte
+Carlo are described in the article below.
 
 ## Citation
 
@@ -103,4 +137,4 @@ apps are kept in [`legacy/`](legacy/) and are no longer installed.
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).

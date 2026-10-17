@@ -3,6 +3,7 @@ Analysis of overlapped counts: the Rietveld fit (forward model through the
 pulse pattern) and Wiener deconvolution as in frame-overlap Bragg-edge
 imaging (FOBI).
 """
+import warnings
 import numpy as np
 import pandas as pd
 
@@ -14,26 +15,34 @@ class Window:
     Split of the time after a pulse into the analysis window
     [wavelength_min, wavelength_max], where the transmission is the nbragg
     model, and the rest, where it is a free piecewise-linear function of time
-    (nuisance values at knots, held constant beyond the last knot). The
-    neutrons outside the window are still modelled where they overlap other
-    pulses, but the physics parameters take no information from them, and
-    model errors there cannot bias them.
+    (nuisance values at knots). Beyond the last knot it follows the model's
+    smooth shape (``tail``), scaled by the last free value, or is constant.
+    The neutrons outside the window are still modelled where they overlap
+    other pulses, but the physics parameters take no information from them,
+    and model errors there cannot bias them.
     """
 
     def __init__(self, grid, wavelength_min=1.0, wavelength_max=5.0, knots=None, last=None, tail=None):
+        if not wavelength_min < wavelength_max:
+            raise ValueError("the window needs wavelength_min < wavelength_max")
+        if wavelength_min < grid.wavelength[0] or wavelength_max > grid.wavelength[-1]:
+            raise ValueError(f"the window {wavelength_min}-{wavelength_max} A is not inside the wavelengths of the "
+                             f"grid ({grid.wavelength[0]:.3f}-{grid.wavelength[-1]:.2f} A)")
         t = grid.t
         lam = grid.wavelength
-        self.wavelength_min, self.wavelength_max = wavelength_min, wavelength_max
+        self.wavelength_min, self.wavelength_max = float(wavelength_min), float(wavelength_max)
         self.inside = (lam >= wavelength_min) & (lam <= wavelength_max)
+        if self.inside.sum() < 10:
+            raise ValueError("the window holds fewer than 10 time bins")
         t1, t2 = t[self.inside][0], t[self.inside][-1]
+        dt = grid.bin_width
         if knots is None:
             # dense near the window edges (the pulse width smears counts from
             # just outside the window into it), coarser far from it
-            dt = grid.bin_width
-            lo = np.r_[t[:6], np.geomspace(t[6], 0.6 * t1, 8), np.arange(0.6 * t1, t1 - dt, 100e-6)]
-            lo = np.r_[lo[lo < t1 - dt - 0.5 * dt], t1 - dt]
+            lo = np.r_[t[:6], np.geomspace(t[6], max(0.6 * t1, t[7]), 8), np.arange(0.6 * t1, t1 - dt, 100e-6)]
+            lo = np.r_[lo[lo < t1 - 1.5 * dt], t1 - dt] if t1 - dt > t[0] else np.array([])
             t_end = last if last is not None else min(grid.period - dt, 2.2 * t2)
-            near = np.arange(t2 + dt, min(t2 + 2e-3, t_end), 200e-6)
+            near = np.arange(t2 + dt, min(t2 + 2e-3, t_end), 200e-6) if t_end > t2 + dt else np.array([t2 + dt])
             far = np.geomspace(near[-1] + 200e-6, t_end, 10) if t_end > near[-1] + 200e-6 else []
             knots = np.r_[lo, near, far]
         self.knots = np.unique(np.asarray(knots, float))
@@ -45,17 +54,16 @@ class Window:
                 e = np.zeros(len(kn))
                 e[j] = 1.0
                 B[k, side] = np.interp(t[side], kn, e)
-        if tail is not None:
-            # beyond the last knot: the model's smooth shape (absorption) scaled
-            # by the last free value, instead of a constant
+        if tail is not None and len(self.knots) > n_lo:
             far = t > self.knots[-1]
             T_last = np.interp(self.knots[-1], t, tail)
             B[-1, far] = np.asarray(tail, float)[far] / max(T_last, 1e-12)
         self.B = B
 
-    @property
-    def range(self):
-        return (self.wavelength_min - 0.25, self.wavelength_max + 0.25)
+    def range_for(self, sample):
+        """Wavelength range evaluated by nbragg: the window plus the sample's margin."""
+        m = sample.margin
+        return (self.wavelength_min - m, self.wavelength_max + m)
 
     def centre(self, sample, grid, theta):
         """Model transmission at the knots (the prior centre and start of the
@@ -70,28 +78,50 @@ class Window:
 # ------------------------------------------------------------------- result
 
 class FitResult:
-    """Result of a fit: values, standard errors (inverse Fisher matrix at the
-    solution), deviance, model counts, and what the method produced."""
+    """
+    Result of a fit: values and standard errors of the free parameters (and
+    of extra quantities the fit determined), the fit statistic, and what the
+    method produced. ``fit_report()`` prints an nbragg-style summary;
+    ``params`` holds the fitted values as lmfit Parameters.
+    """
 
-    def __init__(self, method, names, theta, sigma, deviance, success, nfev, data, sample, **extra):
+    def __init__(self, method, names, theta, sigma, covariance, statistic, n_used, success, nfev, data, sample,
+                 **extra):
         self.method, self.names = method, list(names)
         self.theta, self.sigma = np.asarray(theta, float), np.asarray(sigma, float)
-        self.deviance, self.success, self.nfev = float(deviance), bool(success), int(nfev)
+        self.covariance = covariance
+        self.statistic, self.n_used = float(statistic), int(n_used)
+        self.success, self.nfev = bool(success), int(nfev)
         self.data, self.sample = data, sample
         self.extra = extra
 
+    # ---------------------------------------------------------------- values
     @property
     def values(self):
-        return dict(zip(self.names, self.theta))
+        return {n: float(v) for n, v in zip(self.names, self.theta)}
 
     @property
     def errors(self):
-        return dict(zip(self.names, self.sigma))
+        return {n: float(s) for n, s in zip(self.names, self.sigma)}
+
+    @property
+    def deviance(self):
+        return self.statistic
+
+    @property
+    def params(self):
+        """The sample's lmfit Parameters with the fitted values and errors."""
+        p = self.sample.params.copy()
+        for n, v, s in zip(self.names, self.theta, self.sigma):
+            if n in p:
+                p[n].set(value=float(v))
+                p[n].stderr = float(s)
+        return p
 
     def to_dataframe(self):
         rows = []
         for n, v, s in zip(self.names, self.theta, self.sigma):
-            row = dict(parameter=n, value=v, error=s)
+            row = dict(parameter=n, value=float(v), error=float(s))
             if self.data is not None and self.data.truth and n in self.data.truth:
                 row["truth"] = self.data.truth[n]
             if n == "strain":
@@ -99,24 +129,75 @@ class FitResult:
             rows.append(row)
         return pd.DataFrame(rows)
 
-    def summary(self):
-        df = self.to_dataframe()
-        stat = "deviance" if "model_counts" in self.extra else "chi2"
-        head = f"{self.method}: {stat} per bin {self.deviance / self.data.grid.n_bins:.3f}, " \
-               f"{'converged' if self.success else 'NOT converged'} after {self.nfev} evaluations"
-        return head + "\n" + df.to_string(index=False)
+    def fit_report(self):
+        stat = "deviance" if self.method.startswith("Rietveld") else "chi2"
+        lines = [f"[[{self.method}]]",
+                 f"    {'converged' if self.success else 'NOT converged'} after {self.nfev} evaluations",
+                 f"    {stat} per bin = {self.statistic / max(self.n_used, 1):.3f} ({self.n_used} bins with counts)",
+                 "[[Parameters]]"]
+        for n, v, s in zip(self.names, self.theta, self.sigma):
+            tr = ""
+            if self.data is not None and self.data.truth and n in self.data.truth:
+                tr = f"   (truth {self.data.truth[n]:.6g})"
+            unit = f"  = {v * 1e6:.1f} +/- {s * 1e6:.1f} microstrain" if n == "strain" else ""
+            lines.append(f"    {n:12s} {v:12.6g} +/- {s:.3g}{unit}{tr}")
+        if "note" in self.extra:
+            lines.append(f"    note: {self.extra['note']}")
+        return "\n".join(lines)
+
+    summary = fit_report
+
+    def residuals(self):
+        """Deviance residuals of the counts (Rietveld fit), or normalised
+        residuals of the recovered transmission in the window (Wiener)."""
+        if "model_counts" in self.extra:
+            return _dev_resid(self.data.counts, self.extra["model_counts"])[0]
+        return self.extra["residuals"]
+
+    def transmission(self):
+        """Transmission spectrum recovered from the data: for the Rietveld fit,
+        the counts of each bin divided between the pulses in proportion to
+        their fitted contributions and moved back to their pulse (as Rietveld
+        programs divide the counts of overlapping reflections); for Wiener
+        deconvolution, the ratio of the deconvolved sample and open beam.
+        Returns (wavelength, transmission, uncertainty) for a pulse at t = 0."""
+        g = self.data.grid
+        if "transmission" in self.extra:
+            T = self.extra["transmission"]
+            return g.wavelength, T, self.extra.get("transmission_sigma", np.full_like(T, np.nan))
+        y = self.data.counts - self.data.background * self.data.time
+        parts = self.extra["contributions"]
+        mu = np.clip(sum(parts), 1e-12, None)
+        num, var, ob = np.zeros(g.n_bins), np.zeros(g.n_bins), np.zeros(g.n_bins)
+        n = self.data.n_periods
+        pat = self.data.pattern
+        for (s, w, a), part in zip(zip(pat.starts, pat.widths, pat.intensities), parts):
+            share = part / mu
+            k = int(round(s / g.bin_width)) % g.n_bins
+            num += np.roll(y * share, -k)
+            var += np.roll(np.clip(mu, 0, None) * share ** 2, -k)
+            ob += n * a * g.convolve(self.data.beam.rate, pat.__class__([0.0], w).array(g))
+        ob = np.clip(ob, 1e-12, None)
+        return g.wavelength, num / ob, np.sqrt(var) / ob
 
     def plot(self, ax=None):
-        """Counts and fitted counts (Rietveld fit), or the recovered
-        transmission and the fitted model (Wiener)."""
+        """Counts and fitted counts with the contribution of each pulse
+        (Rietveld fit), or the recovered transmission and the fit (Wiener)."""
         import matplotlib.pyplot as plt
         ax = ax or plt.gca()
         g = self.data.grid
         if "model_counts" in self.extra:
             ax.plot(g.t * 1e3, self.data.counts, color="k", lw=0.35, label="counts")
+            if len(self.extra["contributions"]) > 1:
+                base = np.zeros(g.n_bins)
+                for k, part in enumerate(self.extra["contributions"]):
+                    ax.fill_between(g.t * 1e3, base, base + part, color=str(0.3 + 0.6 * k / len(self.extra["contributions"])),
+                                    lw=0, alpha=0.6)
+                    base = base + part
             ax.plot(g.t * 1e3, self.extra["model_counts"], color="#0072B2", lw=0.8, label=self.method)
             ax.set_xlabel("Time in the period (ms)")
             ax.set_ylabel(f"Counts per {g.bin_width * 1e6:g} µs")
+            ax.set_xlim(0, g.period * 1e3)
         else:
             sel = self.extra["selection"]
             ax.plot(g.wavelength[sel], self.extra["transmission"][sel], color="#D55E00", lw=0.5, label="recovered")
@@ -142,6 +223,14 @@ def _dev_resid(y, mu):
     return r, drdmu
 
 
+def _inverse(F):
+    try:
+        return np.linalg.inv(F)
+    except np.linalg.LinAlgError:
+        warnings.warn("the Fisher matrix is singular: some quantities are not determined by the data", stacklevel=3)
+        return np.linalg.pinv(F)
+
+
 # ------------------------------------------------------------------- Rietveld
 
 class RietveldFit:
@@ -149,7 +238,7 @@ class RietveldFit:
     Rietveld fit of the (overlapped) counts: the nbragg model is passed
     through the known pulse pattern,
 
-        mu_theta(t) = n_periods * [c (*) (o T_theta)](t),
+        mu(t) = n_periods * [c (*) (o T_theta)](t) + background * time,
 
     and compared with the counts by the Poisson likelihood. Works for any
     pattern, including one pulse per period and patterns whose Fourier
@@ -160,20 +249,24 @@ class RietveldFit:
     Parameters
     ----------
     window : (float, float)
-        Analysis window [Angstrom].
+        Analysis window [Angstrom]. It must lie inside the sample's
+        ``fine_range`` when the strain is free.
     prior_sigma : float
         Width of the prior on the free transmission outside the window.
-    max_nfev : int
-        Maximum number of function evaluations of the solver.
-    bounds : dict, optional
-        {name: (lo, hi)} for the free parameters (default: thickness >= 0).
+    fit_background : bool
+        Also determine a constant count background (counts per bin and second).
+    fit_t0 : bool
+        Also determine a common time offset of the pulses (seconds).
+    fit_intensities : bool
+        Also determine the relative intensities of pulses 2..N (pulse 1 fixed).
+    max_nfev, tol : solver settings (bounded trust-region least squares).
     """
 
-    def __init__(self, window=(1.0, 5.0), prior_sigma=1.0, max_nfev=200, bounds=None, knots=None, tol=1e-10):
-        self.window, self.prior_sigma, self.max_nfev = tuple(window), float(prior_sigma), int(max_nfev)
-        self.tol = float(tol)
-        self.bounds = dict(bounds or {})
-        self.knots = knots
+    def __init__(self, window=(1.0, 5.0), prior_sigma=1.0, fit_background=False, fit_t0=False,
+                 fit_intensities=False, max_nfev=200, knots=None, tol=1e-10):
+        self.window, self.prior_sigma = tuple(window), float(prior_sigma)
+        self.fit_background, self.fit_t0, self.fit_intensities = fit_background, fit_t0, fit_intensities
+        self.max_nfev, self.knots, self.tol = int(max_nfev), knots, float(tol)
 
     def window_for(self, grid, sample=None, theta=None):
         """The analysis window; with a sample, the far tail beyond the last knot
@@ -182,56 +275,109 @@ class RietveldFit:
         return Window(grid, *self.window, knots=self.knots, tail=tail)
 
     def fit(self, data, sample, theta0=None):
+        """Fit a Measurement with a Sample; start from ``theta0`` (default:
+        the sample's values). Returns a FitResult."""
         from scipy.optimize import least_squares
+        sample.check_window(self.window)
         grid = data.grid
         th0 = sample.theta if theta0 is None else np.asarray(theta0, float)
-        win = self.window_for(grid, sample, th0)
-        c = data.pattern.array(grid)
-        Cf = np.fft.rfft(c)
-        conv = lambda x: np.fft.irfft(np.fft.rfft(x, axis=-1) * Cf, n=grid.n_bins, axis=-1)
-        ob = data.n_periods * data.beam.rate
-        y = data.counts
         nth = len(th0)
+        win = self.window_for(grid, sample, th0)
+        rng = win.range_for(sample)
+        pat = data.pattern
+        n = data.n_periods
+        y = data.counts
+        o = data.beam.rate
+        bg_known = data.background * data.time
         beta0 = win.centre(sample, grid, th0)
         nb = len(beta0)
-        rng = win.range
         sp = self.prior_sigma
 
-        def T_of(x):
-            return win.T(sample.transmission(grid, x[:nth], rng), x[nth:])
+        names_x = []
+        x_extra0 = []
+        if self.fit_background:
+            names_x.append("background")
+            x_extra0.append(0.0)
+        if self.fit_t0:
+            names_x.append("t0")
+            x_extra0.append(0.0)
+        if self.fit_intensities and pat.n_pulses > 1:
+            names_x += [f"intensity_{k + 1}" for k in range(1, pat.n_pulses)]
+            x_extra0 += list(pat.intensities[1:])
+        ne = len(names_x)
+
+        def split(x):
+            return x[:nth], x[nth:nth + ne], x[nth + ne:]
+
+        def unpack(ex):
+            """(background, t0, intensities) from the extra parameters."""
+            i, bg, t0, a = 0, 0.0, 0.0, pat.intensities.copy()
+            if self.fit_background:
+                bg, i = ex[i], i + 1
+            if self.fit_t0:
+                t0, i = ex[i], i + 1
+            if self.fit_intensities and pat.n_pulses > 1:
+                a[1:] = ex[i:]
+            return bg, t0, a
+
+        def pattern_array(t0, a):
+            if t0 == 0.0 and np.array_equal(a, pat.intensities):
+                return pat.array(grid)
+            return pat.__class__((pat.starts + t0) % grid.period, pat.widths, a).array(grid)
+
+        def mu_of(x):
+            th, ex, be = split(x)
+            bg, t0, a = unpack(ex)
+            c = pattern_array(t0, a)
+            T = win.T(sample.transmission(grid, th, rng), be)
+            return n * grid.convolve(o * T, c) + bg_known + bg * data.time, T, c
+
+        def dmu(x):
+            """mu and d mu / d x, shape (len(x), n_bins)."""
+            th, ex, be = split(x)
+            mu, T, c = mu_of(x)
+            d = np.vstack([sample.derivatives(grid, th, rng, central=False) * win.inside, win.B])
+            Jm = n * grid.convolve(o * d, c)
+            rows = [Jm[:nth]]
+            for j in range(ne):
+                h = {"background": 1.0, "t0": 1e-7}.get(names_x[j], 1e-3)
+                xp = x.copy()
+                xp[nth + j] += h
+                rows.append(((mu_of(xp)[0] - mu) / h)[None, :])
+            rows.append(Jm[nth:])
+            return mu, np.vstack(rows)
 
         def fun(x):
-            r = _dev_resid(y, conv(ob * T_of(x)))[0]
-            return np.r_[r, (x[nth:] - beta0) / sp]
+            return np.r_[_dev_resid(y, mu_of(x)[0])[0], (x[nth + ne:] - beta0) / sp]
 
         def jac(x):
-            _, drdmu = _dev_resid(y, conv(ob * T_of(x)))
-            d = np.vstack([sample.derivatives(grid, x[:nth], rng, central=False) * win.inside, win.B])
-            J = (drdmu[None, :] * conv(ob * d)).T
-            prior = np.hstack([np.zeros((nb, nth)), np.eye(nb) / sp])
-            return np.vstack([J, prior])
+            mu, D = dmu(x)
+            _, drdmu = _dev_resid(y, mu)
+            prior = np.hstack([np.zeros((nb, nth + ne)), np.eye(nb) / sp])
+            return np.vstack([(drdmu[None, :] * D).T, prior])
 
-        lo = [self.bounds.get(n, (0.0, np.inf) if n == "thickness" else (-np.inf, np.inf))[0] for n in sample.free]
-        hi = [self.bounds.get(n, (0.0, np.inf) if n == "thickness" else (-np.inf, np.inf))[1] for n in sample.free]
-        lb = np.r_[lo, np.full(nb, -0.5)]
-        ub = np.r_[hi, np.full(nb, 1.5)]
-        x0 = np.clip(np.r_[th0, beta0], lb + 1e-12, ub - 1e-12)
-        # tight tolerances: the cost includes the misfit of the free transmission
-        # outside the window, which does not depend on theta, so relative
-        # tolerances would stop the solver early
-        r = least_squares(fun, x0, jac=jac, method="trf", x_scale="jac", bounds=(lb, ub), max_nfev=self.max_nfev,
-                          ftol=self.tol, xtol=self.tol, gtol=self.tol)
-        mu = conv(ob * T_of(r.x))
-        d = np.vstack([sample.derivatives(grid, r.x[:nth], rng) * win.inside, win.B])
-        J = conv(ob * d)
-        F = (J / np.clip(mu, 1e-12, None)) @ J.T
-        F[nth:, nth:] += np.eye(nb) / sp ** 2
-        sig = np.sqrt(np.diag(np.linalg.inv(F))[:nth])
-        parts = [data.n_periods * grid.convolve(data.beam.rate * T_of(r.x), data.pattern.__class__(
-            [s], w, a).array(grid)) for s, w, a in zip(data.pattern.starts, data.pattern.widths, data.pattern.intensities)]
-        return FitResult("Rietveld fit", sample.free, r.x[:nth], sig, np.sum(r.fun[:grid.n_bins] ** 2),
-                         r.status > 0, r.nfev, data, sample, model_counts=mu, contributions=parts,
-                         nuisance=r.x[nth:], window=win)
+        lo_t, hi_t = sample.bounds()
+        lo_e = [-np.inf if nm in ("background", "t0") else 0.0 for nm in names_x]
+        lb = np.r_[lo_t, lo_e, np.full(nb, -0.5)]
+        ub = np.r_[hi_t, np.full(ne, np.inf), np.full(nb, 1.5)]
+        x0 = np.clip(np.r_[th0, x_extra0, beta0], lb + 1e-12, ub - 1e-12)
+        r = least_squares(fun, x0, jac=jac, method="trf", x_scale="jac", bounds=(lb, ub),
+                          max_nfev=self.max_nfev, ftol=self.tol, xtol=self.tol, gtol=self.tol)
+        mu, D = dmu(r.x)
+        F = (D / np.clip(mu, 1e-12, None)[None, :]) @ D.T
+        F[nth + ne:, nth + ne:] += np.eye(nb) / sp ** 2
+        C = _inverse(F)
+        k = nth + ne
+        sig = np.sqrt(np.clip(np.diag(C)[:k], 0, None))
+        th, ex, be = split(r.x)
+        _, t0, a = unpack(ex)
+        T = win.T(sample.transmission(grid, th, rng), be)
+        parts = [n * grid.convolve(o * T, pat.__class__([(s + t0) % grid.period], w, ak).array(grid))
+                 for s, w, ak in zip(pat.starts, pat.widths, a)]
+        used = (mu > 1e-3) | (y > 0)
+        return FitResult("Rietveld fit", sample.free + names_x, r.x[:k], sig, C[:k, :k],
+                         np.sum(r.fun[:grid.n_bins] ** 2), used.sum(), r.status > 0, r.nfev, data, sample,
+                         model_counts=mu, contributions=parts, nuisance=be, window=win)
 
 
 # ------------------------------------------------------------------- Wiener
@@ -256,46 +402,61 @@ class WienerFit:
     et al. 2020) followed by a fit of the nbragg model to the recovered
     transmission. The sample counts and the open beam measured with the same
     pattern are deconvolved with the same filter, the transmission is their
-    ratio, and it is fitted in ``window`` with independent bins.
+    ratio, and it is fitted in ``window`` with independent bins, as in
+    practice. The reported errors account for the correlations that the
+    deconvolution creates between bins (a sandwich estimate); the fit
+    itself ignores them, which is what loses information.
 
     Parameters
     ----------
-    noise_power : float or "optimal"
+    noise_power : float > 0 or "optimal"
         Constant regularisation of the filter (as in FOBI), or the optimal
         filter eps(f) = noise power / signal power estimated from the model
         at the starting values.
     """
 
     def __init__(self, noise_power=1e-3, window=(1.0, 5.0), max_nfev=200, tol=1e-10):
-        self.noise_power, self.window, self.max_nfev = noise_power, tuple(window), int(max_nfev)
-        self.tol = float(tol)
+        if isinstance(noise_power, str):
+            if noise_power != "optimal":
+                raise ValueError('noise_power must be a positive number or "optimal"')
+        elif not noise_power > 0:
+            raise ValueError("noise_power must be positive (or \"optimal\")")
+        self.noise_power, self.window, self.max_nfev, self.tol = noise_power, tuple(window), int(max_nfev), float(tol)
 
     def fit(self, data, sample, theta0=None):
+        """Fit a Measurement with a Sample. Returns a FitResult."""
         from scipy.ndimage import uniform_filter1d
         from scipy.optimize import least_squares
+        sample.check_window(self.window)
         grid = data.grid
         pat = data.pattern
+        if np.ptp(pat.widths) > 0:
+            raise NotImplementedError("WienerFit needs pulses of equal width")
         box = pat.__class__([0.0], pat.widths[0]).array(grid)
         th0 = sample.theta if theta0 is None else np.asarray(theta0, float)
         rate = data.beam.rate
         n = data.n_periods
-        y = data.counts
+        y = data.counts - data.background * data.time
+        y_sm = np.clip(uniform_filter1d(data.counts, 21, mode="wrap"), 1, None)
         O = data.open_counts()
         delta = pat.delta(grid)
         npow = self.noise_power
         if isinstance(npow, str):
             s1 = n * grid.convolve(rate * sample.transmission(grid, th0), box)
-            npow = y.sum() / np.clip(np.abs(np.fft.fft(s1)) ** 2, 1e-30, None)
-        if pat.n_pulses == 1:
-            shat, var, ohat = y, np.clip(uniform_filter1d(y, 21, mode="wrap"), 1, None), O
+            npow = data.counts.sum() / np.clip(np.abs(np.fft.fft(s1)) ** 2, 1e-30, None)
+        single = pat.n_pulses == 1
+        if single:
+            shat, var, ohat = y, y_sm, O
+            Hf = None
         else:
+            Hf = wiener_filter(delta, npow)
             shat, _ = wiener(y, delta, npow)
-            _, var = wiener(uniform_filter1d(y, 21, mode="wrap"), delta, npow)
+            _, var = wiener(y_sm, delta, npow)
             ohat, _ = wiener(O, delta, npow)
         lam = grid.wavelength
         sel = (lam >= self.window[0]) & (lam <= self.window[1]) & (ohat > 0)
         sd = np.sqrt(var)
-        rng = (self.window[0] - 0.25, self.window[1] + 0.25)
+        rng = (self.window[0] - sample.margin, self.window[1] + sample.margin)
         ob1 = grid.convolve(rate, box)
         Tbox = lambda T: grid.convolve(rate * T, box) / np.clip(ob1, 1e-30, None)
 
@@ -306,12 +467,27 @@ class WienerFit:
             d = sample.derivatives(grid, th, rng, central=central)
             return -((ohat * grid.convolve(rate * d, box) / np.clip(ob1, 1e-30, None))[:, sel] / sd[sel]).T
 
-        lo = [0.0 if nm == "thickness" else -np.inf for nm in sample.free]
-        r = least_squares(fun, th0, jac=jac, method="trf", x_scale="jac", bounds=(lo, np.inf), max_nfev=self.max_nfev,
-                          ftol=self.tol, xtol=self.tol, gtol=self.tol)
-        J = jac(r.x, central=True)
-        sig = np.sqrt(np.diag(np.linalg.inv(J.T @ J)))
+        lo, hi = sample.bounds()
+        r = least_squares(fun, np.clip(th0, lo + 1e-12, hi - 1e-12), jac=jac, method="trf", x_scale="jac",
+                          bounds=(lo, hi), max_nfev=self.max_nfev, ftol=self.tol, xtol=self.tol, gtol=self.tol)
+        A = jac(r.x, central=True)                                   # d residual / d theta on sel
+        AtA_inv = _inverse(A.T @ A)
+        if single:
+            meat = A.T @ A
+        else:
+            # covariance of the residuals: D H diag(y) H^T D, D = 1 / sd on sel
+            B = np.zeros((A.shape[1], grid.n_bins))
+            B[:, sel] = (A / sd[sel][:, None]).T
+            HtB = np.real(np.fft.ifft(np.fft.fft(B, axis=1) * np.conj(Hf)[None, :], axis=1))
+            CB = np.real(np.fft.ifft(np.fft.fft(HtB * y_sm[None, :], axis=1) * Hf[None, :], axis=1))
+            meat = (B[:, sel] / 1.0) @ CB[:, sel].T
+        C = AtA_inv @ meat @ AtA_inv
+        sig = np.sqrt(np.clip(np.diag(C), 0, None))
         That = shat / np.where(np.abs(ohat) > 0, ohat, np.nan)
-        return FitResult("Wiener deconvolution", sample.free, r.x, sig, np.sum(r.fun ** 2), r.status > 0, r.nfev,
-                         data, sample, transmission=That,
-                         model_transmission=Tbox(sample.transmission(grid, r.x)), selection=sel)
+        res = np.full(grid.n_bins, np.nan)
+        res[sel] = r.fun
+        return FitResult("Wiener deconvolution", sample.free, r.x, sig, C, np.sum(r.fun ** 2), sel.sum(),
+                         r.status > 0, r.nfev, data, sample, transmission=That,
+                         transmission_sigma=sd / np.where(np.abs(ohat) > 0, np.abs(ohat), np.nan),
+                         model_transmission=Tbox(sample.transmission(grid, r.x)), selection=sel, residuals=res,
+                         note="errors include the correlations created by the deconvolution (sandwich estimate)")
