@@ -91,14 +91,24 @@ class Experiment:
     background : float
         Constant count background per time bin and second of measurement.
         It is passed on to simulated measurements, so fits know it.
+    count_variance : float
+        Variance of the recorded counts relative to Poisson counts (1 for a
+        counting detector). An event-mode camera whose clustering records
+        some neutrons as several events has more, about 2.3 for the camera of
+        the SARAF-II projections in bins of 1 mm and more. The Cramer-Rao
+        bounds grow by sqrt(count_variance), time-reduction factors do not
+        change, and simulated counts get the same variance.
     """
 
-    def __init__(self, sample, beam, pattern, time, background=0.0):
+    def __init__(self, sample, beam, pattern, time, background=0.0, count_variance=1.0):
         pattern.check(beam.grid)
         if beam.total_rate() <= 0:
             raise ValueError("the open beam is empty")
         self.sample, self.beam, self.pattern, self.time = sample, beam, pattern, _check_time(time)
         self.background = float(background)
+        if count_variance < 1:
+            raise ValueError("count_variance must be at least 1 (1 = Poisson counts)")
+        self.count_variance = float(count_variance)
         self.grid = beam.grid
 
     @property
@@ -114,13 +124,17 @@ class Experiment:
     def simulate(self, seed=None):
         """One Poisson draw of the sample counts (a Measurement)."""
         rng = np.random.default_rng(seed)
-        y = rng.poisson(self.expected_counts()).astype(float)
+        mu = self.expected_counts()
+        if self.count_variance == 1.0:
+            y = rng.poisson(mu).astype(float)
+        else:   # mean mu, variance count_variance * mu
+            y = self.count_variance * rng.poisson(mu / self.count_variance).astype(float)
         truth = dict(zip(self.sample.free, (float(v) for v in self.sample.theta)))
         return Measurement(self.grid, y, self.pattern, self.beam, self.time, self.background, truth=truth)
 
     def _variant(self, **kw):
         args = dict(sample=self.sample, beam=self.beam, pattern=self.pattern, time=self.time,
-                    background=self.background)
+                    background=self.background, count_variance=self.count_variance)
         args.update(kw)
         e = Experiment(**args)
         if "_dT" in self.__dict__ and args["sample"] is self.sample:     # derivatives do not depend on these

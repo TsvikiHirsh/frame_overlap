@@ -185,6 +185,28 @@ def test_two_separate_pulses_double_the_information(setup):
     assert np.isclose(R["thickness"], 2.0, rtol=0.02) and np.isclose(R["strain"], 2.0, rtol=0.02)
 
 
+def test_count_variance(setup):
+    """Recorded counts with F times the Poisson variance: bounds x sqrt(F), gains unchanged,
+    simulated counts with the right mean and variance."""
+    sample, grid, beam = setup
+    pat = fo.Pattern.times([0.0, 12e-3, 22.3e-3, 35.5e-3])
+    exp = fo.Experiment(sample, beam, pat, time=8 * 3600)
+    cam = fo.Experiment(sample, beam, pat, time=8 * 3600, count_variance=2.3)
+    s0 = exp.precision().set_index("parameter").sigma
+    s1 = cam.precision().set_index("parameter").sigma
+    assert np.allclose(s1 / s0, np.sqrt(2.3), rtol=0.01)
+    assert cam.with_pattern(fo.Pattern.single()).count_variance == 2.3
+    g0, g1 = exp.gain(), cam.gain()
+    assert all(np.isclose(g0[n], g1[n], rtol=0.01) for n in g0)
+    mu = cam.expected_counts()
+    ys = np.array([cam.simulate(seed=k).counts for k in range(40)])
+    hi = mu > 200
+    assert np.isclose(ys.mean(axis=0)[hi].sum(), mu[hi].sum(), rtol=0.01)
+    assert np.isclose((ys.var(axis=0)[hi] / mu[hi]).mean(), 2.3, rtol=0.1)
+    with pytest.raises(ValueError):
+        fo.Experiment(sample, beam, pat, time=3600, count_variance=0.5)
+
+
 def test_bandwidth_chopper_gain(setup):
     """Four equally spaced pulses with a bandwidth chopper: R = 4."""
     sample, grid, beam = setup

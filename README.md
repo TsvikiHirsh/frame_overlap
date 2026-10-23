@@ -102,6 +102,12 @@ intensities can be fitted as well (`fit_background`, `fit_t0`, `fit_intensities`
   gain, and eight optimised overlapping pulses kept theirs for the edge position, while longer
   pulses and narrow chopper bands moved with the model errors inside the analysis window. The
   free transmission outside the window protects the fit from model errors there.
+* **Event-mode cameras record more variance than Poisson counts.** If the clustering records
+  some neutrons as several events, pass `count_variance=F` to `Experiment` (F = variance of the
+  recorded counts relative to Poisson counts; about 2.3 for the camera of the article in bins of
+  1 mm and more). The bounds grow by sqrt(F), time-reduction factors do not change, and
+  simulated counts get the same variance. F can be measured from second differences of the
+  counts in a smooth part of a spectrum.
 * `optimise_pattern` is a stochastic search: more restarts and steps can find better patterns.
 * `monte_carlo(..., workers=n)` runs in parallel by forking (Linux, macOS); elsewhere it runs
   serially.

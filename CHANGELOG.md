@@ -15,6 +15,8 @@ Complete rewrite on top of nbragg.
   offset, relative pulse intensities. `FitResult` with `to_dataframe`, `fit_report`,
   `residuals`, `transmission` (counts divided between the pulses) and `plot`.
 - Bandwidth chopper for n equally spaced pulses: `OpenBeam.with_band_for(n)`.
+- `Experiment(count_variance=F)`: recorded counts with F times the Poisson variance (event-mode
+  cameras); bounds x sqrt(F), simulated counts with that variance.
 - Input checks with clear messages (grid, pattern period and times in seconds, overlapping
   pulses, counts, analysis window inside the sample's fine range).
 - `monte_carlo` starts fits from displaced values, records failures, and runs in parallel by

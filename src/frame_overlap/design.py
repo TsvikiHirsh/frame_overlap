@@ -53,7 +53,8 @@ def _extra_rows(exp, background, t0, intensities):
 def fisher(exp, window=(1.0, 5.0), prior_sigma=1.0, extra=None, knots=None,
            background=False, t0=False, intensities=False):
     """
-    Fisher matrix of the Poisson counts of a design for the free parameters,
+    Fisher matrix of the counts of a design (Poisson, with the variance
+    multiplied by ``exp.count_variance``) for the free parameters,
     optional extra quantities (a constant background, a common time offset,
     the relative pulse intensities), and the free transmission outside the
     window (with its weak prior). ``extra``: further derivative rows of the
@@ -72,7 +73,7 @@ def fisher(exp, window=(1.0, 5.0), prior_sigma=1.0, extra=None, knots=None,
     erows, enames = _extra_rows(exp, background, t0, intensities)
     J_b = n * grid.convolve(exp.beam.rate * win.B, c)
     J = np.vstack([J_t] + ([np.array(erows)] if erows else []) + [J_b])
-    F = (J / np.clip(mu, 1e-12, None)) @ J.T
+    F = (J / np.clip(exp.count_variance * mu, 1e-12, None)) @ J.T      # recorded counts: variance count_variance * mu
     nb = win.B.shape[0]
     F[-nb:, -nb:] += np.eye(nb) / prior_sigma ** 2
     names = list(exp.sample.free) + [f"extra_{i}" for i in range(J_t.shape[0] - dT.shape[0])] + enames
