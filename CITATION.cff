@@ -19,7 +19,7 @@ license: MIT
 keywords: [neutron imaging, Bragg edge, time of flight, frame overlap, chopper, nbragg]
 preferred-citation:
   type: article
-  title: "Projected precision of Bragg-edge imaging at the SARAF-II time-of-flight facility with programmable pulse patterns"
+  title: "Bragg-edge imaging with programmable overlapping neutron pulses at SARAF-II"
   authors:
     - family-names: Hirsh
       given-names: Tsviki Y.

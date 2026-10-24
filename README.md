@@ -26,6 +26,34 @@ pip install git+https://github.com/TsvikiHirsh/frame_overlap.git
 
 Requires Python ≥ 3.9 and nbragg ≥ 1.0 (with NCrystal).
 
+## Plan a measurement
+
+Give the sample as an nbragg cross-section and say what you want to measure. `fo.plan` optimises
+the pulse times and tells you the precision and the measurement time for any bin size:
+
+```python
+import nbragg
+import frame_overlap as fo
+
+xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
+plan = fo.plan(xs, thickness=2.0, target="strain", n_pulses=[1, 2, 4, 8, 12],
+               instrument=fo.Instrument.saraf_ii())
+
+print(plan.summary(strain=1000))                   # pulse times, gains, hours for 1000 microstrain
+plan.time_for(bin_size=1.0, strain=1000) / 3600    # hours for 1000 microstrain in 1 mm bins
+plan.precision(time=8 * 3600, bin_size=2.0)        # one standard deviation in 8 h, 2 mm bins
+plan.plot(strain=1000)
+```
+
+![Eight pulses optimised for the Bragg-edge position of 2 cm of iron at SARAF-II, and the measurement time for 1000 microstrain against the bin size](docs/plan_iron.png)
+
+The targets are `"strain"` (the Bragg-edge position, in microstrain), `"thickness"` (in
+micrometres) or another nbragg parameter, such as a phase weight. `fo.Instrument(...)` describes
+another beam line: flight path, repetition rate, flux, detector efficiency and counting statistics,
+or a measured open beam. The numbers are Cramér–Rao bounds of the Rietveld fit, which the fit
+reaches when a spectrum holds more than about 5×10⁴ independent counts; the plan warns below that.
+Tutorial [`05_planning_a_measurement.ipynb`](notebooks/05_planning_a_measurement.ipynb).
+
 ## Quick start
 
 ```python
@@ -70,6 +98,7 @@ result.plot()
 | `RietveldFit` | forward fit of the counts through the pattern (Poisson likelihood); nbragg inside an analysis window, a free transmission outside it |
 | `WienerFit` | FOBI-style deconvolution of sample and open beam with the same filter, then a fit of their ratio |
 | `precision`, `gain`, `survey`, `optimise_pattern`, `monte_carlo`, `pattern_bias` | design tools |
+| `plan`, `Plan`, `Instrument` | planning in one call: optimised pulse times for a material and a quantity, precision and measurement time against bin size |
 
 The expected counts of a design are μ(t) = n_periods · [c ⊛ (o T)](t): the open time c of the
 pattern in each bin, convolved over the period with the open beam o of one pulse times the
@@ -120,6 +149,7 @@ Jupyter notebooks in [`notebooks/`](notebooks/), all on simulated data:
 2. [`02_choosing_a_pulse_pattern.ipynb`](notebooks/02_choosing_a_pulse_pattern.ipynb): precision and gain of pulse patterns, bandwidth chopper, optimisation.
 3. [`03_fitting_your_measurement.ipynb`](notebooks/03_fitting_your_measurement.ipynb): load measured counts, open beam and pattern, fit, check the result.
 4. [`04_what_must_be_known.ipynb`](notebooks/04_what_must_be_known.ipynb): how well the pulse pattern, the normalisation and the edge shape must be known.
+5. [`05_planning_a_measurement.ipynb`](notebooks/05_planning_a_measurement.ipynb): optimised pulse times and measurement time for a material, in one call.
 
 ## Validation
 
@@ -133,8 +163,8 @@ Carlo are described in the article below.
 
 ## Citation
 
-T. Y. Hirsh et al., *Projected precision of Bragg-edge imaging at the SARAF-II time-of-flight
-facility with programmable pulse patterns* (in preparation). Please also cite nbragg and NCrystal.
+T. Y. Hirsh et al., *Bragg-edge imaging with programmable overlapping neutron pulses at SARAF-II*
+(in preparation). Please also cite nbragg and NCrystal.
 
 ## History
 

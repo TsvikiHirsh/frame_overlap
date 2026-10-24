@@ -2,10 +2,17 @@
 frame_overlap: Bragg-edge transmission with programmable pulse patterns and
 frame overlap, on top of nbragg.
 
-A typical session::
+Planning a measurement takes one call::
 
     import nbragg
     import frame_overlap as fo
+
+    xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
+    plan = fo.plan(xs, thickness=2.0, target="strain", n_pulses=[1, 2, 4, 8])
+    print(plan.summary(strain=1000))      # pulse times, gains, hours for 1000 microstrain
+    plan.time_for(bin_size=1.0, strain=1000)
+
+A full session, step by step::
 
     # the material, as in nbragg
     xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
@@ -28,7 +35,8 @@ A typical session::
     print(result.summary())
 
 Main objects: TimeGrid, OpenBeam, Pattern, Sample, Experiment, Measurement,
-RietveldFit, WienerFit; design tools: precision, gain, survey,
+RietveldFit, WienerFit; planning: plan, Plan, Instrument,
+camera_count_variance; design tools: precision, gain, survey,
 optimise_pattern, monte_carlo, pattern_bias.
 """
 from .grid import TimeGrid, time_to_wavelength, wavelength_to_time
@@ -38,8 +46,10 @@ from .sample import Sample
 from .experiment import Experiment, Measurement
 from .fitting import RietveldFit, WienerFit, FitResult, Window
 from .design import fisher, precision, gain, survey, optimise_pattern, monte_carlo, pattern_bias
+from .plan import plan, Plan, Instrument, camera_count_variance
 
 __version__ = "1.0.0.dev0"
 __all__ = ["TimeGrid", "time_to_wavelength", "wavelength_to_time", "OpenBeam", "Pattern", "Sample",
            "Experiment", "Measurement", "RietveldFit", "WienerFit", "FitResult", "Window", "fisher",
-           "precision", "gain", "survey", "optimise_pattern", "monte_carlo", "pattern_bias"]
+           "precision", "gain", "survey", "optimise_pattern", "monte_carlo", "pattern_bias", "plan", "Plan",
+           "Instrument", "camera_count_variance"]

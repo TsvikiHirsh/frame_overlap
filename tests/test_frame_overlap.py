@@ -260,3 +260,27 @@ def test_survey_and_monte_carlo(setup):
     assert np.all(np.abs(summary.bias / summary.bound) < 3)
     par, _ = fo.monte_carlo(exp, fo.RietveldFit(), n=6, seed=3, workers=2)   # same draws in parallel
     assert np.allclose(par[sample.free].values, est[sample.free].values)
+
+
+def test_plan(setup):
+    """plan: an optimised pattern, its gain, and time and precision that invert each other."""
+    sample, grid, _ = setup
+    ins = fo.Instrument(efficiency=0.2, count_variance=2.0)
+    p = fo.plan(sample, target="strain", n_pulses=[1, 2], instrument=ins, n_restarts=1, n_steps=150, seed=1)
+    assert p.pattern.n_pulses == 2 and p.gain["strain"] > 1.9 and not p.pattern.overlaps(grid.period)
+    assert list(p.candidates.n_pulses) == [1, 2]
+    t = p.time_for(bin_size=1.0, strain=500)
+    assert np.isclose(p.precision(time=t, bin_size=1.0).set_index("parameter").sigma["strain"], 500)
+    s1 = p.precision(8 * 3600, 1.0).set_index("parameter").sigma
+    s2 = p.precision(8 * 3600, 2.0).set_index("parameter").sigma
+    assert np.allclose(s1 / s2, 2.0)                      # one over the bin side at constant F
+    exact = p.experiment(8 * 3600, 1.0).precision().set_index("parameter").sigma
+    assert np.isclose(s1["strain"], exact["strain"] * 1e6, rtol=0.01)
+    with pytest.warns(UserWarning):
+        p.precision(time=60, bin_size=0.1)                # too few counts for the bound
+
+
+def test_camera_count_variance():
+    F = fo.camera_count_variance([0.109, 1.0, 3.5, 20.0])
+    assert np.allclose(F[[0, 2, 3]], [1.10, 2.30, 2.30]) and 2.05 < F[1] < 2.28
+    assert np.isclose(float(fo.Instrument.saraf_ii().F(1.0)), F[1])

@@ -288,6 +288,33 @@ also be treated as unknown, in the bound and in ``RietveldFit``
 ]
 
 
+NB["05_planning_a_measurement"] = [
+    md("""# Planning a measurement
+
+Give the sample as an nbragg cross-section. `fo.plan` optimises the pulse times
+for the quantity you want to measure and tells you the precision and the
+measurement time for any bin size. The instrument here is the SARAF-II
+time-of-flight station of the article (9 m, 20 Hz, 5e6 n/cm²/s, the event-mode
+camera); describe another one with `fo.Instrument(...)`."""),
+    code('''import nbragg
+import frame_overlap as fo
+
+xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
+plan = fo.plan(xs, thickness=2.0, target="strain", n_pulses=[1, 2, 4, 8, 12],
+               instrument=fo.Instrument.saraf_ii())
+plan.candidates          # every number of pulses tried, with its gain R'''),
+    code('''print(plan.summary(strain=1000))'''),
+    code('''plan.time_for(bin_size=[0.5, 1, 2, 5], strain=1000) / 3600     # hours for 1000 microstrain'''),
+    code('''fig = plan.plot(strain=1000)
+fig.savefig("../docs/plan_iron.png", dpi=150, bbox_inches="tight")'''),
+    md("""The numbers are Cramér–Rao bounds of the Rietveld fit. They hold when a
+spectrum has more than about 5e4 independent counts; check smaller bins with
+`fo.monte_carlo(plan.experiment(time, bin_size), fo.RietveldFit())`. For another
+instrument give its flight path, frequency, flux, detector efficiency and
+counting statistics to `fo.Instrument`, or a measured open beam with
+`open_beam=fo.OpenBeam.from_counts(...)`."""),
+]
+
 def build(name, cells):
     nb = nbf.v4.new_notebook()
     nb.cells = cells

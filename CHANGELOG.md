@@ -14,6 +14,11 @@ Complete rewrite on top of nbragg.
 - Optional fitted extras in `RietveldFit` and in the bound: constant background, common time
   offset, relative pulse intensities. `FitResult` with `to_dataframe`, `fit_report`,
   `residuals`, `transmission` (counts divided between the pulses) and `plot`.
+- `plan`: from an nbragg cross-section (or model) to optimised pulse times for a chosen quantity,
+  their gain over one pulse per period, and the precision and measurement time for any bin size
+  (`Plan.precision`, `Plan.time_for`, `Plan.summary`, `Plan.plot`). `Instrument` describes the
+  beam line (`Instrument.saraf_ii()` for the station of the article), `camera_count_variance` the
+  counting statistics of an event-mode camera against the bin size.
 - Bandwidth chopper for n equally spaced pulses: `OpenBeam.with_band_for(n)`.
 - `Experiment(count_variance=F)`: recorded counts with F times the Poisson variance (event-mode
   cameras); bounds x sqrt(F), simulated counts with that variance.
