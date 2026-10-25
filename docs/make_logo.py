@@ -53,7 +53,7 @@ for s in STARTS:
 ax.plot([-0.95, 0.95], [base, base], color="#c3c8d0", lw=1.0, zorder=4).__getitem__(0).set_clip_path(disc)
 font = font_manager.FontProperties(fname=FONT) if os.path.exists(FONT) else font_manager.FontProperties(
     family="serif")
-ax.text(0, 0.6, "frame_overlap", color=INK, fontproperties=font, fontsize=22, ha="center", va="center", zorder=6)
+ax.text(0, 0.57, "frame_overlap", color=INK, fontproperties=font, fontsize=28, ha="center", va="center", zorder=6)
 ax.add_patch(Circle((0, 0), 1.0, fill=False, ec="#cfd4dc", lw=2.5, zorder=7))
 fig.savefig(os.path.join(HERE, "logo.png"), transparent=True)
 print("written", os.path.join(HERE, "logo.png"))
