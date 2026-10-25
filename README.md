@@ -1,22 +1,69 @@
 # frame_overlap
 
-**Bragg-edge transmission with programmable pulse patterns and frame overlap, on top of [nbragg](https://github.com/TsvikiHirsh/nbragg).**
+**Bragg-edge imaging with programmable, overlapping neutron pulses, on top of [nbragg](https://github.com/TsvikiHirsh/nbragg).**
 
-`frame_overlap` answers two questions for time-of-flight Bragg-edge imaging at a source whose
-pulses can be shaped, such as a continuous-wave accelerator with a digital chopper:
+At a continuous source with a fast chopper, such as SARAF-II, several pulses per period bring more
+neutrons, but their spectra overlap. frame_overlap fits the overlapped counts directly: nbragg's
+transmission model is convolved with the pulse pattern and compared with the counts (a Rietveld fit
+of the counts). It also plans the pulse pattern and the measurement time for a sample, a precision
+and a spatial resolution.
 
-1. **Which pulse pattern should I use?** One pulse per period, a longer pulse, equally spaced
-   pulses with a bandwidth chopper, or overlapping pulses at chosen times. `frame_overlap`
-   computes the precision every design can reach (the Cramér–Rao bound of the counts) and
-   searches for good pulse times.
-2. **How do I analyse overlapped spectra?** With a *Rietveld fit of the overlapped spectrum*: the
-   nbragg transmission model is passed through the known pulse pattern and fitted to the counts
-   with the Poisson likelihood. It works for any pattern and reaches the information limit of the
-   data. Wiener deconvolution as in frame-overlap Bragg-edge imaging (FOBI) is included for
-   comparison.
+## Quick example
 
-You describe the material exactly as in nbragg; `frame_overlap` adds the instrument, the pulse
-pattern and the measurement time.
+Fit a measurement with four overlapping pulses per period, as you would fit one spectrum in nbragg:
+
+```python
+import nbragg
+import frame_overlap as fo
+
+xs = nbragg.CrossSection(iron="Fe_sg229_Iron-alpha.ncmat")                           # define sample
+pattern = fo.Pattern([0, 11.97e-3, 22.33e-3, 35.48e-3])                               # pulse times [s]
+model = fo.TransmissionModel(xs, pattern=pattern, vary_basic=True, vary_strain=True)  # define model
+data = fo.Data.from_counts("sample.csv", "openbeam.csv", pattern=pattern, time=8 * 3600)  # read data
+result = model.fit(data)                                                              # perform fit
+result.plot()                                                                         # plot results
+```
+
+![Rietveld fit of four overlapping pulses](docs/fit_iron.png)
+
+The plot shows the transmission recovered from the overlapped counts, the fitted model and the
+residuals in units of their standard deviation. `result.params` holds the fitted values and errors
+as lmfit Parameters, and `print(result.fit_report())` summarises the fit.
+
+## Plan a measurement
+
+Give the sample and say what you want to measure. `fo.plan` optimises the pulse times and tells you
+the precision and the measurement time for any bin size:
+
+```python
+plan = fo.plan(xs, thickness=2.0, target="strain", n_pulses=[1, 2, 4, 8, 12],
+               instrument=fo.Instrument.saraf_ii())
+print(plan.summary(strain=1000))                   # pulse times, gains, hours for 1000 microstrain
+plan.time_for(bin_size=1.0, strain=1000) / 3600    # hours for 1000 microstrain in 1 mm bins
+plan.plot(strain=1000)
+```
+
+![Eight pulses optimised for the Bragg-edge position of 2 cm of iron at SARAF-II, and the measurement time for 1000 microstrain against the bin size](docs/plan_iron.png)
+
+`plan.model` carries the chosen pattern: `plan.model.fit(data)` fits a measurement with it, and
+`plan.simulate(time, bin_size)` makes a projected one.
+
+## Features
+
+- **The nbragg workflow**: the same `CrossSection`, the same `vary_*` switches, `model.fit(data)`,
+  `result.plot()` and lmfit `params`; nbragg's other model methods pass through.
+- **Rietveld fit of overlapped counts**: Poisson likelihood, the nbragg model inside an analysis
+  window and a free transmission outside it. It reaches the Cramér–Rao bound for any pulse pattern.
+- **Wiener deconvolution** as in frame-overlap Bragg-edge imaging (FOBI), for comparison
+  (`method="wiener"`).
+- **Pulse patterns**: explicit times, equally spaced, random, maximum-length and quadratic-residue
+  sequences, the POLDI slit positions, and patterns optimised for a quantity.
+- **Planning**: Cramér–Rao bounds, time-reduction factors against one pulse per period, optimised
+  pulse times, and the measurement time against the bin size.
+- **Projected measurements** (`model.simulate`), including the counting statistics of event-mode
+  cameras, which record more variance than Poisson counts.
+- **Checks**: Monte Carlo fits against the bound (`model.monte_carlo`) and the bias from errors in
+  the assumed pulse pattern (`model.pattern_bias`).
 
 ## Installation
 
@@ -24,152 +71,55 @@ pattern and the measurement time.
 pip install git+https://github.com/TsvikiHirsh/frame_overlap.git
 ```
 
-Requires Python ≥ 3.9 and nbragg ≥ 1.0 (with NCrystal).
-
-## Plan a measurement
-
-Give the sample as an nbragg cross-section and say what you want to measure. `fo.plan` optimises
-the pulse times and tells you the precision and the measurement time for any bin size:
-
-```python
-import nbragg
-import frame_overlap as fo
-
-xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
-plan = fo.plan(xs, thickness=2.0, target="strain", n_pulses=[1, 2, 4, 8, 12],
-               instrument=fo.Instrument.saraf_ii())
-
-print(plan.summary(strain=1000))                   # pulse times, gains, hours for 1000 microstrain
-plan.time_for(bin_size=1.0, strain=1000) / 3600    # hours for 1000 microstrain in 1 mm bins
-plan.precision(time=8 * 3600, bin_size=2.0)        # one standard deviation in 8 h, 2 mm bins
-plan.plot(strain=1000)
-```
-
-![Eight pulses optimised for the Bragg-edge position of 2 cm of iron at SARAF-II, and the measurement time for 1000 microstrain against the bin size](docs/plan_iron.png)
-
-The targets are `"strain"` (the Bragg-edge position, in microstrain), `"thickness"` (in
-micrometres) or another nbragg parameter, such as a phase weight. `fo.Instrument(...)` describes
-another beam line: flight path, repetition rate, flux, detector efficiency and counting statistics,
-or a measured open beam. The numbers are Cramér–Rao bounds of the Rietveld fit, which the fit
-reaches when a spectrum holds more than about 5×10⁴ independent counts; the plan warns below that.
-Tutorial [`05_planning_a_measurement.ipynb`](notebooks/05_planning_a_measurement.ipynb).
-
-## Quick start
-
-```python
-import nbragg
-import frame_overlap as fo
-
-# 1. the material, as in nbragg
-xs = nbragg.CrossSection(materials={"iron": {"mat": "Fe_sg229_Iron-alpha.ncmat"}})
-model = nbragg.TransmissionModel(xs, response="jorgensen_inv", tof_length=9.0, vary_response=False)
-model.params["thickness"].set(value=2.0)                 # cm
-model.params["α0"].set(value=3000.0)                     # moderator response, close to
-model.params["β0"].set(value=50.0)                       # a water moderator
-sample = fo.Sample(model, free=["thickness", "strain"])  # what to determine
-
-# 2. the instrument and the measurement design
-grid = fo.TimeGrid(flight_path=9.0, frequency=20.0, bin_width=10e-6)
-beam = fo.OpenBeam.maxwellian(grid, flux=5e6, area=0.03)          # n/cm²/s, cm²
-pattern = fo.Pattern.times([0, 12.0e-3, 22.3e-3, 35.5e-3], width=200e-6)
-exp = fo.Experiment(sample, beam, pattern, time=8 * 3600)
-
-# 3. what this design can reach
-print(exp.precision())     # Cramér–Rao bound of each parameter (strain in microstrain)
-print(exp.gain())          # time-reduction factor against one 200 µs pulse per period
-
-# 4. simulate a measurement and analyse it
-data = exp.simulate(seed=1)
-result = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample)
-print(result.summary())
-result.plot()
-```
-
-## Concepts
-
-| Object | What it is |
-|---|---|
-| `TimeGrid` | time bins of one period (flight path, repetition rate, bin width); slow neutrons of one period arrive in the next |
-| `OpenBeam` | open-beam rate of one pulse: from a measured spectrum (`from_counts`, `from_reference`) or a thermal moderator model (`maxwellian`); `with_band` adds an ideal bandwidth chopper, `with_band_for(n)` the widest band that fits between n equally spaced pulses |
-| `Pattern` | the pulse pattern ("kernel"): `single`, `equal`, `times`, `random`, `maximum_length`, `quadratic_residue`, `poldi`, or `optimise_pattern` |
-| `Sample` | an nbragg `TransmissionModel` with free parameters; `"strain"` moves all Bragg edges by Δλ/λ smoothly (nbragg passes lattice parameters with four decimals) |
-| `Experiment` | sample + open beam + pattern + time; `expected_counts`, `simulate`, `precision`, `gain` |
-| `Measurement` | counts of a measurement with its pattern and open beam (simulated or your own data) |
-| `RietveldFit` | forward fit of the counts through the pattern (Poisson likelihood); nbragg inside an analysis window, a free transmission outside it |
-| `WienerFit` | FOBI-style deconvolution of sample and open beam with the same filter, then a fit of their ratio |
-| `precision`, `gain`, `survey`, `optimise_pattern`, `monte_carlo`, `pattern_bias` | design tools |
-| `plan`, `Plan`, `Instrument` | planning in one call: optimised pulse times for a material and a quantity, precision and measurement time against bin size |
-
-The expected counts of a design are μ(t) = n_periods · [c ⊛ (o T)](t): the open time c of the
-pattern in each bin, convolved over the period with the open beam o of one pulse times the
-sample transmission T. Times are in seconds, wavelengths in Å, thicknesses in cm.
-
-## Your own data
-
-```python
-open_beam = fo.OpenBeam.from_counts(grid, open_counts, pulse_width=10e-6, time=8 * 3600)
-data = fo.Measurement(grid, sample_counts, pattern, open_beam, time=8 * 3600)
-result = fo.RietveldFit(window=(1.0, 5.0)).fit(data, sample)
-result.to_dataframe()          # values and errors (strain also in microstrain)
-result.residuals()             # deviance residuals of the counts
-result.transmission()          # transmission recovered from the overlapped counts
-```
-
-`sample_counts` are the counts of one period (summed over all periods), `open_counts` the open
-beam measured with one short pulse per period and much better statistics (for example summed
-over the detector). A constant background, a common time offset and the relative pulse
-intensities can be fitted as well (`fit_background`, `fit_t0`, `fit_intensities`), and
-`exp.precision(background=True, t0=True, intensities=True)` gives what that costs.
-
-## What to watch
-
-* **The pulse pattern, the normalisation and the moderator response are taken as known.**
-  Tutorial 04 shows how errors in them bias the result and what fitting them costs.
-* **The precision of a design is realised only if the transmission model describes the data at
-  that level.** In the article, with the measured transmission of iron as the truth, designs
-  that only add neutrons to the same spectrum (separate spectra over the full band) kept their
-  gain, and eight optimised overlapping pulses kept theirs for the edge position, while longer
-  pulses and narrow chopper bands moved with the model errors inside the analysis window. The
-  free transmission outside the window protects the fit from model errors there.
-* **Event-mode cameras record more variance than Poisson counts.** If the clustering records
-  some neutrons as several events, pass `count_variance=F` to `Experiment` (F = variance of the
-  recorded counts relative to Poisson counts; about 2.3 for the camera of the article in bins of
-  1 mm and more). The bounds grow by sqrt(F), time-reduction factors do not change, and
-  simulated counts get the same variance. F can be measured from second differences of the
-  counts in a smooth part of a spectrum.
-* `optimise_pattern` is a stochastic search: more restarts and steps can find better patterns.
-* `monte_carlo(..., workers=n)` runs in parallel by forking (Linux, macOS); elsewhere it runs
-  serially.
+Requires Python 3.9 or later and nbragg 1.0 or later (with NCrystal).
 
 ## Tutorials
 
 Jupyter notebooks in [`notebooks/`](notebooks/), all on simulated data:
 
-1. [`01_quickstart.ipynb`](notebooks/01_quickstart.ipynb): one measurement from model to fit, Rietveld fit against Wiener deconvolution.
-2. [`02_choosing_a_pulse_pattern.ipynb`](notebooks/02_choosing_a_pulse_pattern.ipynb): precision and gain of pulse patterns, bandwidth chopper, optimisation.
-3. [`03_fitting_your_measurement.ipynb`](notebooks/03_fitting_your_measurement.ipynb): load measured counts, open beam and pattern, fit, check the result.
-4. [`04_what_must_be_known.ipynb`](notebooks/04_what_must_be_known.ipynb): how well the pulse pattern, the normalisation and the edge shape must be known.
-5. [`05_planning_a_measurement.ipynb`](notebooks/05_planning_a_measurement.ipynb): optimised pulse times and measurement time for a material, in one call.
+1. [`01_quickstart.ipynb`](notebooks/01_quickstart.ipynb): from a material to a fitted measurement,
+   the Rietveld fit against Wiener deconvolution.
+2. [`02_planning.ipynb`](notebooks/02_planning.ipynb): optimised pulse times, precision and
+   measurement time for a material; other patterns compared.
+3. [`03_your_data.ipynb`](notebooks/03_your_data.ipynb): read measured counts and an open beam, fit
+   them, and see what must be known.
 
-## Validation
+## How it works
 
-`pytest -q tests` runs tests with known answers: noiseless round trips of the Rietveld fit for
-one, two and four pulses (the truth within 0.1 standard deviations, the remainder from the
-straight lines of the free transmission between knots), a fitted background, the doubling of
-information by two separate pulses, R = 4 for four pulses with a bandwidth chopper, the Wiener
-ratio for a pattern with spectral zeros, the bias from an error in the assumed pattern, pattern
-optimisation, and serial and parallel Monte Carlo. The method and its validation against Monte
-Carlo are described in the article below.
+The expected counts of a pulse pattern are the transmission of one pulse, times the open beam,
+convolved with the pattern over the period:
+
+    mu(t) = n_periods * [c (*) (o T)](t),
+
+with c(t) the open time of the chopper, o(t) the open beam of one pulse and T(t) the nbragg
+transmission. Slow neutrons of one period arrive in the next, so the convolution is circular. The
+Rietveld fit maximises the Poisson likelihood of the measured counts over the free parameters. Inside
+the analysis window (default 1–5 Å) T is the nbragg model; outside it T is a free function of time
+with a weak prior, so that model errors there cannot bias the result. The Cramér–Rao bound of this
+fit is the precision a design can reach.
+
+## What to watch
+
+- **The pulse times, their intensities, the open beam and the moderator response are taken as
+  known.** Measure the open beam with one short pulse per period and good statistics. Tutorial 03
+  shows how an error in the pattern biases the result, and how a common time offset and the pulse
+  intensities can be fitted as well (`fit_t0`, `fit_intensities`).
+- **Every free parameter costs precision in the others.** The normalisation is fixed by default,
+  because the open beam is known (`vary_norm=True` frees it).
+- **Edge positions are fitted as a strain** (`vary_strain=True`), which moves every Bragg edge by
+  d&lambda;/&lambda;. nbragg passes lattice parameters to NCrystal with four decimals, so they move
+  the edges in steps.
+- **Event-mode cameras record more variance than Poisson counts.** Pass `count_variance` (about 2.3
+  for the camera of the SARAF-II projections in bins of 1 mm and more). The errors grow by its square
+  root.
+- **Small bins**: the Rietveld fit reaches the bound above about 5×10⁴ independent counts per
+  spectrum. The planner warns below that; check with `model.monte_carlo`.
+- `optimise_pattern` is a stochastic search: more restarts and steps can find better times.
 
 ## Citation
 
 T. Y. Hirsh et al., *Bragg-edge imaging with programmable overlapping neutron pulses at SARAF-II*
 (in preparation). Please also cite nbragg and NCrystal.
-
-## History
-
-Version 1.0 replaces the earlier deconvolution-centred package; the old code, notebooks and
-apps are kept in [`legacy/`](legacy/) and are no longer installed.
 
 ## License
 

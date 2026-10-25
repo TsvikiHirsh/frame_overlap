@@ -80,13 +80,13 @@ def fisher(exp, window=(1.0, 5.0), prior_sigma=1.0, extra=None, knots=None,
     return F, names
 
 
-def precision(exp, window=(1.0, 5.0), prior_sigma=1.0, background=False, t0=False, intensities=False):
+def precision(exp, window=(1.0, 5.0), prior_sigma=1.0, background=False, t0=False, intensities=False, knots=None):
     """
     Cramer-Rao bound (one standard deviation) of each free parameter for a
     design, as a DataFrame with units; the strain also in microstrain.
     ``background``, ``t0``, ``intensities``: treat these as unknown too.
     """
-    F, names = fisher(exp, window, prior_sigma, background=background, t0=t0, intensities=intensities)
+    F, names = fisher(exp, window, prior_sigma, knots=knots, background=background, t0=t0, intensities=intensities)
     k = len(names)
     sig = np.sqrt(np.diag(_inverse(F))[:k])
     vals = list(exp.sample.theta) + [np.nan] * (k - len(exp.sample.free))

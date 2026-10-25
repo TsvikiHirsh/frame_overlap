@@ -79,10 +79,15 @@ class Window:
 
 class FitResult:
     """
-    Result of a fit: values and standard errors of the free parameters (and
-    of extra quantities the fit determined), the fit statistic, and what the
-    method produced. ``fit_report()`` prints an nbragg-style summary;
-    ``params`` holds the fitted values as lmfit Parameters.
+    Result of ``TransmissionModel.fit``, with the attributes of an lmfit
+    ModelResult as in nbragg: ``params`` (lmfit Parameters with the fitted
+    values and standard errors, the strain included), ``fit_report()``,
+    ``plot()``, ``chisqr`` (the deviance of the counts for the Rietveld fit,
+    chi^2 of the recovered spectrum for Wiener deconvolution), ``redchi`` (per
+    bin), ``best_fit`` (expected counts), ``residual``, ``success`` and
+    ``nfev``. ``transmission()`` returns the transmission recovered from the
+    counts. Standard errors include the counting statistics of the data
+    (``count_variance``).
     """
 
     def __init__(self, method, names, theta, sigma, covariance, statistic, n_used, success, nfev, data, sample,
@@ -105,20 +110,42 @@ class FitResult:
         return {n: float(s) for n, s in zip(self.names, self.sigma)}
 
     @property
-    def deviance(self):
+    def chisqr(self):
         return self.statistic
+
+    deviance = chisqr
+
+    @property
+    def redchi(self):
+        return self.statistic / max(self.n_used, 1)
+
+    @property
+    def best_fit(self):
+        """Expected counts of the fit (Rietveld), or the fitted transmission (Wiener)."""
+        return self.extra.get("model_counts", self.extra.get("model_transmission"))
+
+    @property
+    def residual(self):
+        return self.residuals()
 
     @property
     def params(self):
-        """The sample's lmfit Parameters with the fitted values and errors."""
+        """The model's lmfit Parameters with the fitted values and standard errors (strain included)."""
+        import lmfit
         p = self.sample.params.copy()
+        if "strain" not in p:
+            p.add("strain", value=float(self.sample.strain), vary="strain" in self.names)
         for n, v, s in zip(self.names, self.theta, self.sigma):
             if n in p:
                 p[n].set(value=float(v))
                 p[n].stderr = float(s)
+            else:                                          # background, t0, pulse intensities
+                p.add(n, value=float(v))
+                p[n].stderr = float(s)
         return p
 
     def to_dataframe(self):
+        """Values and standard errors of the determined quantities (strain also in microstrain)."""
         rows = []
         for n, v, s in zip(self.names, self.theta, self.sigma):
             row = dict(parameter=n, value=float(v), error=float(s))
@@ -130,11 +157,13 @@ class FitResult:
         return pd.DataFrame(rows)
 
     def fit_report(self):
-        stat = "deviance" if self.method.startswith("Rietveld") else "chi2"
+        stat = "deviance" if self.method.startswith("Rietveld") else "chi-square"
+        F = getattr(self.data, "count_variance", 1.0)
         lines = [f"[[{self.method}]]",
                  f"    {'converged' if self.success else 'NOT converged'} after {self.nfev} evaluations",
-                 f"    {stat} per bin = {self.statistic / max(self.n_used, 1):.3f} ({self.n_used} bins with counts)",
-                 "[[Parameters]]"]
+                 f"    {stat} per bin = {self.redchi:.3f} ({self.n_used} bins)"
+                 + (f"; expected {F:g} for count_variance {F:g}" if F != 1.0 else ""),
+                 "[[Variables]]"]
         for n, v, s in zip(self.names, self.theta, self.sigma):
             tr = ""
             if self.data is not None and self.data.truth and n in self.data.truth:
@@ -147,6 +176,9 @@ class FitResult:
 
     summary = fit_report
 
+    def __str__(self):
+        return self.fit_report()
+
     def residuals(self):
         """Deviance residuals of the counts (Rietveld fit), or normalised
         residuals of the recovered transmission in the window (Wiener)."""
@@ -154,57 +186,102 @@ class FitResult:
             return _dev_resid(self.data.counts, self.extra["model_counts"])[0]
         return self.extra["residuals"]
 
-    def transmission(self):
-        """Transmission spectrum recovered from the data: for the Rietveld fit,
-        the counts of each bin divided between the pulses in proportion to
-        their fitted contributions and moved back to their pulse (as Rietveld
-        programs divide the counts of overlapping reflections); for Wiener
-        deconvolution, the ratio of the deconvolved sample and open beam.
-        Returns (wavelength, transmission, uncertainty) for a pulse at t = 0."""
+    def _model_transmission(self):
+        """The fitted transmission of one pulse, averaged over the pulse as the
+        recovered spectrum is (single-pulse open beam as weight)."""
         g = self.data.grid
+        box = self.data.pattern.__class__([0.0], self.data.pattern.widths[0]).array(g)
+        rate = self.data.openbeam.rate
+        T = self.extra.get("fitted_transmission")
+        if T is None:
+            return self.extra["model_transmission"]
+        return g.convolve(rate * T, box) / np.clip(g.convolve(rate, box), 1e-30, None)
+
+    def transmission(self):
+        """
+        Transmission spectrum recovered from the data, for a pulse at t = 0,
+        as a DataFrame (wavelength, trans, err, model): for the Rietveld fit
+        the counts of each bin are divided between the pulses in proportion
+        to their fitted contributions and moved back to their pulse (as
+        Rietveld programs divide the counts of overlapping reflections); for
+        Wiener deconvolution it is the ratio of the deconvolved sample and
+        open beam. ``model`` is the fitted transmission averaged in the same way.
+        """
+        g = self.data.grid
+        F = getattr(self.data, "count_variance", 1.0)
         if "transmission" in self.extra:
             T = self.extra["transmission"]
-            return g.wavelength, T, self.extra.get("transmission_sigma", np.full_like(T, np.nan))
-        y = self.data.counts - self.data.background * self.data.time
-        parts = self.extra["contributions"]
-        mu = np.clip(sum(parts), 1e-12, None)
-        num, var, ob = np.zeros(g.n_bins), np.zeros(g.n_bins), np.zeros(g.n_bins)
-        n = self.data.n_periods
-        pat = self.data.pattern
-        for (s, w, a), part in zip(zip(pat.starts, pat.widths, pat.intensities), parts):
-            share = part / mu
-            k = int(round(s / g.bin_width)) % g.n_bins
-            num += np.roll(y * share, -k)
-            var += np.roll(np.clip(mu, 0, None) * share ** 2, -k)
-            ob += n * a * g.convolve(self.data.beam.rate, pat.__class__([0.0], w).array(g))
-        ob = np.clip(ob, 1e-12, None)
-        return g.wavelength, num / ob, np.sqrt(var) / ob
+            err = self.extra.get("transmission_sigma", np.full_like(T, np.nan))
+        else:
+            y = self.data.counts - self.data.background * self.data.time
+            parts = self.extra["contributions"]
+            mu = np.clip(sum(parts), 1e-12, None)
+            num, var, ob = np.zeros(g.n_bins), np.zeros(g.n_bins), np.zeros(g.n_bins)
+            n = self.data.n_periods
+            pat = self.data.pattern
+            for (s, w, a), part in zip(zip(pat.starts, pat.widths, pat.intensities), parts):
+                share = part / mu
+                k = int(round(s / g.bin_width)) % g.n_bins
+                num += np.roll(y * share, -k)
+                var += np.roll(np.clip(mu, 0, None) * share ** 2, -k)
+                ob += n * a * g.convolve(self.data.openbeam.rate, pat.__class__([0.0], w).array(g))
+            ob = np.clip(ob, 1e-12, None)
+            T, err = num / ob, np.sqrt(F * var) / ob
+        return pd.DataFrame(dict(wavelength=g.wavelength, trans=T, err=err, model=self._model_transmission()))
 
-    def plot(self, ax=None):
-        """Counts and fitted counts with the contribution of each pulse
-        (Rietveld fit), or the recovered transmission and the fit (Wiener)."""
+    def plot(self, kind="transmission", wlmin=None, wlmax=None, ax=None):
+        """
+        nbragg-style plot of the fit. ``kind="transmission"`` (default): the
+        transmission recovered from the counts with the fitted model (grey)
+        and, below, the residuals in units of the standard deviation of each
+        bin with chi^2 per bin. ``kind="counts"``: the counts, the fitted
+        expected counts and the contribution of each pulse.
+        Returns the matplotlib axes.
+        """
         import matplotlib.pyplot as plt
-        ax = ax or plt.gca()
+        colour = "#0072B2" if self.method.startswith("Rietveld") else "#D55E00"
         g = self.data.grid
-        if "model_counts" in self.extra:
+        if kind == "counts":
+            ax = ax or plt.figure(figsize=(8, 3.2)).gca()
             ax.plot(g.t * 1e3, self.data.counts, color="k", lw=0.35, label="counts")
-            if len(self.extra["contributions"]) > 1:
-                base = np.zeros(g.n_bins)
+            if "contributions" in self.extra and len(self.extra["contributions"]) > 1:
                 for k, part in enumerate(self.extra["contributions"]):
-                    ax.fill_between(g.t * 1e3, base, base + part, color=str(0.3 + 0.6 * k / len(self.extra["contributions"])),
-                                    lw=0, alpha=0.6)
-                    base = base + part
-            ax.plot(g.t * 1e3, self.extra["model_counts"], color="#0072B2", lw=0.8, label=self.method)
+                    ax.fill_between(g.t * 1e3, 0, part, color=("#9ecae1", "#c6dbef")[k % 2], lw=0, alpha=0.8)
+            if "model_counts" in self.extra:
+                ax.plot(g.t * 1e3, self.extra["model_counts"], color=colour, lw=0.8, label=self.method)
             ax.set_xlabel("Time in the period (ms)")
             ax.set_ylabel(f"Counts per {g.bin_width * 1e6:g} µs")
             ax.set_xlim(0, g.period * 1e3)
+            ax.legend(frameon=False)
+            return ax
+        win = self.extra.get("window_range", (1.0, 5.0))
+        lo, hi = wlmin or win[0], wlmax or win[1]
+        tab = self.transmission()
+        sel = (tab.wavelength >= lo) & (tab.wavelength <= hi) & np.isfinite(tab.trans)
+        if ax is None:
+            fig, (ax, axr) = plt.subplots(2, 1, figsize=(7, 4.2), sharex=True, height_ratios=[3, 1],
+                                          gridspec_kw=dict(hspace=0.06))
         else:
-            sel = self.extra["selection"]
-            ax.plot(g.wavelength[sel], self.extra["transmission"][sel], color="#D55E00", lw=0.5, label="recovered")
-            ax.plot(g.wavelength[sel], self.extra["model_transmission"][sel], color="#555555", lw=1.0, label="fit")
+            axr = None
+        t = tab[sel]
+        ax.plot(t.wavelength, t.trans, color=colour, lw=0.5, label="data", zorder=2)
+        ax.plot(t.wavelength, t.model, color="#9a9a9a", lw=2.0, label="best fit", zorder=1)
+        ax.set_ylabel("Transmission")
+        ax.set_title(self.method, loc="left", fontsize=10)
+        ax.legend(frameon=False, loc="upper left")
+        if axr is not None:
+            r = ((t.trans - t.model) / t.err).replace([np.inf, -np.inf], np.nan)
+            axr.plot(t.wavelength, r, color=colour, lw=0.4)
+            axr.axhline(0, color="#555555", lw=0.5)
+            axr.set_ylabel(r"Resid. ($\sigma$)")
+            axr.set_xlabel("Wavelength (Å)")
+            axr.text(0.99, 0.95, f"$\\chi^2$ per bin {np.nanmean(r ** 2):.2f}", transform=axr.transAxes,
+                     ha="right", va="top", fontsize=8)
+            lim = max(4.0, np.nanpercentile(np.abs(r), 99.5) * 1.1) if np.isfinite(r).any() else 4.0
+            axr.set_ylim(-lim, lim)
+        else:
             ax.set_xlabel("Wavelength (Å)")
-            ax.set_ylabel("Transmission")
-        ax.legend()
+        ax.set_xlim(lo, hi)
         return ax
 
     def __repr__(self):
@@ -364,7 +441,8 @@ class RietveldFit:
         r = least_squares(fun, x0, jac=jac, method="trf", x_scale="jac", bounds=(lb, ub),
                           max_nfev=self.max_nfev, ftol=self.tol, xtol=self.tol, gtol=self.tol)
         mu, D = dmu(r.x)
-        F = (D / np.clip(mu, 1e-12, None)[None, :]) @ D.T
+        cv = getattr(data, "count_variance", 1.0)                  # recorded counts: variance cv * mu
+        F = (D / np.clip(cv * mu, 1e-12, None)[None, :]) @ D.T
         F[nth + ne:, nth + ne:] += np.eye(nb) / sp ** 2
         C = _inverse(F)
         k = nth + ne
@@ -377,7 +455,8 @@ class RietveldFit:
         used = (mu > 1e-3) | (y > 0)
         return FitResult("Rietveld fit", sample.free + names_x, r.x[:k], sig, C[:k, :k],
                          np.sum(r.fun[:grid.n_bins] ** 2), used.sum(), r.status > 0, r.nfev, data, sample,
-                         model_counts=mu, contributions=parts, nuisance=be, window=win)
+                         model_counts=mu, contributions=parts, nuisance=be, window=win, fitted_transmission=T,
+                         window_range=self.window)
 
 
 # ------------------------------------------------------------------- Wiener
@@ -481,13 +560,15 @@ class WienerFit:
             HtB = np.real(np.fft.ifft(np.fft.fft(B, axis=1) * np.conj(Hf)[None, :], axis=1))
             CB = np.real(np.fft.ifft(np.fft.fft(HtB * y_sm[None, :], axis=1) * Hf[None, :], axis=1))
             meat = (B[:, sel] / 1.0) @ CB[:, sel].T
-        C = AtA_inv @ meat @ AtA_inv
+        cv = getattr(data, "count_variance", 1.0)                  # recorded counts: variance cv * mu
+        C = cv * (AtA_inv @ meat @ AtA_inv)
         sig = np.sqrt(np.clip(np.diag(C), 0, None))
         That = shat / np.where(np.abs(ohat) > 0, ohat, np.nan)
         res = np.full(grid.n_bins, np.nan)
         res[sel] = r.fun
         return FitResult("Wiener deconvolution", sample.free, r.x, sig, C, np.sum(r.fun ** 2), sel.sum(),
                          r.status > 0, r.nfev, data, sample, transmission=That,
-                         transmission_sigma=sd / np.where(np.abs(ohat) > 0, np.abs(ohat), np.nan),
+                         transmission_sigma=np.sqrt(cv) * sd / np.where(np.abs(ohat) > 0, np.abs(ohat), np.nan),
                          model_transmission=Tbox(sample.transmission(grid, r.x)), selection=sel, residuals=res,
+                         window_range=self.window,
                          note="errors include the correlations created by the deconvolution (sandwich estimate)")

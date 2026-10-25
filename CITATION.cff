@@ -1,6 +1,6 @@
 cff-version: 1.2.0
 message: "If you use frame_overlap, please cite the article below and the software."
-title: "frame_overlap: Bragg-edge transmission with programmable pulse patterns and frame overlap, on top of nbragg"
+title: "frame_overlap: Bragg-edge imaging with programmable, overlapping neutron pulses, on top of nbragg"
 version: 1.0.0.dev0
 abstract: >-
   Design and analysis of time-of-flight Bragg-edge transmission measurements

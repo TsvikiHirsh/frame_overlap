@@ -2,29 +2,29 @@
 
 ## 1.0.0 (unreleased)
 
-Complete rewrite on top of nbragg.
+Complete rewrite on top of nbragg, with nbragg's workflow, for the article *Bragg-edge imaging with
+programmable overlapping neutron pulses at SARAF-II*.
 
-- `TimeGrid`, `OpenBeam`, `Pattern`, `Sample`, `Experiment`, `Measurement`: describe a measurement
-  design with an nbragg material model, an open beam, a pulse pattern and a measurement time.
-- `RietveldFit`: forward fit of (overlapped) counts through the pulse pattern with the Poisson
-  likelihood, nbragg inside an analysis window and a free transmission outside it.
-- `WienerFit`: Wiener deconvolution of sample and open beam as in frame-overlap Bragg-edge imaging.
-- `precision`, `gain`, `survey`, `optimise_pattern`, `monte_carlo`, `pattern_bias`: design tools.
-- `"strain"` as a smooth edge-position parameter (nbragg passes lattice parameters with four decimals).
-- Optional fitted extras in `RietveldFit` and in the bound: constant background, common time
-  offset, relative pulse intensities. `FitResult` with `to_dataframe`, `fit_report`,
-  `residuals`, `transmission` (counts divided between the pulses) and `plot`.
-- `plan`: from an nbragg cross-section (or model) to optimised pulse times for a chosen quantity,
-  their gain over one pulse per period, and the precision and measurement time for any bin size
-  (`Plan.precision`, `Plan.time_for`, `Plan.summary`, `Plan.plot`). `Instrument` describes the
-  beam line (`Instrument.saraf_ii()` for the station of the article), `camera_count_variance` the
-  counting statistics of an event-mode camera against the bin size.
-- Bandwidth chopper for n equally spaced pulses: `OpenBeam.with_band_for(n)`.
-- `Experiment(count_variance=F)`: recorded counts with F times the Poisson variance (event-mode
-  cameras); bounds x sqrt(F), simulated counts with that variance.
-- Input checks with clear messages (grid, pattern period and times in seconds, overlapping
-  pulses, counts, analysis window inside the sample's fine range).
-- `monte_carlo` starts fits from displaced values, records failures, and runs in parallel by
-  forking (nbragg models cannot be pickled).
-- Tutorials in `notebooks/` on simulated data; tests in `tests/`.
-- The version 0.x package, notebooks and apps are kept in `legacy/` and no longer installed.
+- `TransmissionModel`: nbragg's TransmissionModel through a pulse pattern, built with the same
+  arguments and `vary_*` switches, plus `pattern`, `frequency`, `tstep`, `vary_norm` (fixed by
+  default: the open beam is known) and `vary_strain` (the edge position as a smooth strain). Methods
+  `fit`, `simulate`, `expected_counts`, `precision`, `gain`, `optimise_pattern`, `monte_carlo`,
+  `pattern_bias`, `plot`; nbragg's other model methods pass through. A given nbragg model is used
+  with its own copy of the parameters.
+- `fit(data, wlmin, wlmax, method="rietveld" | "wiener")`: the Rietveld fit of the overlapped counts
+  (Poisson likelihood, nbragg inside the analysis window, a free transmission outside it), or Wiener
+  deconvolution as in FOBI followed by a fit of the recovered transmission. Optional constant
+  background, common time offset and relative pulse intensities.
+- `FitResult` with the attributes of an lmfit ModelResult (`params` with the strain, `fit_report`,
+  `redchi`, `best_fit`, `residual`), `transmission()` (the spectrum recovered from the counts) and an
+  nbragg-style `plot()` (transmission, best fit and residuals in standard deviations).
+- `Data`: overlapped counts with their pattern and open beam; `Data.from_counts` reads nbragg's file
+  format; `count_variance` for event-mode cameras (errors scaled by its square root).
+- `Pattern`: explicit times, `single`, `equal`, `random`, `maximum_length`, `quadratic_residue`,
+  `poldi` (default period 50 ms).
+- `plan`, `Plan`, `Instrument`: optimised pulse times for a material and a quantity, their gain, and
+  the precision and measurement time against the bin size; `Instrument.saraf_ii()` and
+  `camera_count_variance` for the station and camera of the article.
+- `OpenBeam`, `TimeGrid` for advanced use (measured or reference spectra, bandwidth chopper bands).
+- Three tutorials on simulated data; tests with known answers. The frame_overlap 0.x package,
+  its notebooks and apps were removed (they remain in the git history).

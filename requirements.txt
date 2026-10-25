@@ -2,4 +2,5 @@ numpy>=1.21
 pandas>=1.5
 scipy>=1.7
 matplotlib>=3.5
+lmfit>=1.0
 nbragg>=1.0

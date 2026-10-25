@@ -1,4 +1,4 @@
-"""Pulse patterns (the 'kernel' of frame overlap): when the chopper opens."""
+"""Pulse patterns (the 'kernel' of frame overlap): when the chopper opens in each period."""
 import numpy as np
 
 POLDI_SLITS_DEG = (0, 9.363, 21.475, 37.039, 50.417, 56.664, 67.422, 75.406)
@@ -6,12 +6,13 @@ POLDI_SLITS_DEG = (0, 9.363, 21.475, 37.039, 50.417, 56.664, 67.422, 75.406)
 _PRIMITIVE = {2: 1, 3: 1, 4: 1, 5: 2, 6: 1, 7: 1, 9: 4, 10: 3, 11: 2}
 
 
+DEFAULT_PERIOD = 50e-3          # 20 Hz, as at SARAF-II
+
+
 def _period(period, grid):
     if grid is not None:
         return grid.period
-    if period is None:
-        raise TypeError("give the period (seconds) or a TimeGrid: e.g. Pattern.equal(4, period=grid.period)")
-    return float(period)
+    return DEFAULT_PERIOD if period is None else float(period)
 
 
 class Pattern:
@@ -19,15 +20,16 @@ class Pattern:
     Pulses of one period: start times [s], widths [s] and relative
     intensities (1 = the full beam while open).
 
-    Build patterns with the constructors ``single``, ``times``, ``equal``,
-    ``random``, ``maximum_length``, ``quadratic_residue`` and ``poldi``, or
-    optimise one for a measurement with ``frame_overlap.optimise_pattern``.
-    Constructors that place pulses within the period need the period (or a
-    TimeGrid).
+    ``Pattern([0, 12e-3, 22.3e-3, 35.5e-3])`` gives pulses at those start times
+    (seconds); the constructors ``single``, ``equal``, ``random``,
+    ``maximum_length``, ``quadratic_residue`` and ``poldi`` build common
+    patterns, and ``TransmissionModel.optimise_pattern`` or ``frame_overlap.plan``
+    find optimised ones. Constructors that place pulses within the period use
+    ``period`` (default 50 ms, 20 Hz).
 
     Examples
     --------
-    >>> Pattern.equal(4, width=200e-6, period=50e-3).times_ms
+    >>> Pattern.equal(4).times_ms
     [0.0, 12.5, 25.0, 37.5]
     """
 
@@ -48,11 +50,6 @@ class Pattern:
     def single(cls, width=200e-6):
         """One pulse per period, starting at t = 0."""
         return cls([0.0], width, name=f"one pulse of {width * 1e6:g} us")
-
-    @classmethod
-    def times(cls, starts, width=200e-6, intensity=1.0):
-        """Pulses at the given start times [s] within the period."""
-        return cls(starts, width, intensity, name=f"{len(np.atleast_1d(starts))} pulses")
 
     @classmethod
     def equal(cls, n, width=200e-6, period=None, grid=None):

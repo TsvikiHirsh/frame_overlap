@@ -12,13 +12,16 @@ A typical session::
     print(plan.summary(strain=1000))            # pulse times, gains, times for 1000 microstrain
     plan.precision(time=8 * 3600, bin_size=1.0)  # one standard deviation in 8 h, 1 mm bins
     plan.time_for(bin_size=1.0, strain=1000)     # seconds for 1000 microstrain in 1 mm bins
+    data = plan.simulate(time=8 * 3600, bin_size=2.0, seed=1)   # a projected measurement
+    result = plan.model.fit(data)                # the model with the chosen pattern
 
 The precision is the Cramer-Rao bound of the Rietveld fit of the overlapped
 counts. It scales as sqrt(F / (time * area)), with F the variance of the
 recorded counts relative to Poisson counts, so one bound per design (for 8 h
 and a bin of 1 mm) gives every time and bin size, as in the article. (The weak
 prior on the transmission outside the analysis window does not scale; exact
-bounds for much fewer counts are a few per cent smaller for the thickness.) In the article the Monte Carlo fits reached the bound above
+bounds for much fewer counts are a few per cent smaller for the thickness.)
+In the article the Monte Carlo fits reached the bound above
 about 6e3 (one pulse per period) to 5e4 (eight pulses) independent counts per
 spectrum; below that the plan warns.
 """
@@ -27,11 +30,10 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 from .grid import TimeGrid
-from .beam import OpenBeam
+from .openbeam import OpenBeam
 from .pattern import Pattern
-from .sample import Sample
-from .experiment import Experiment
-from .design import precision as _precision, optimise_pattern
+from .model import TransmissionModel
+from . import design
 
 # Counting statistics of the event-mode camera of the SARAF-II projections
 # (scintillator, image intensifier, Timepix3 camera, event clustering): variance
@@ -151,25 +153,35 @@ def _display(name):
     return 1.0, ""
 
 
-def _make_sample(material, thickness, instrument, free):
-    if isinstance(material, Sample):
-        sample = material if thickness is None else material.with_values(thickness=thickness)
-        if tuple(sample.free) != tuple(free):
-            sample = Sample(sample.model, params=sample.params, free=free)
-        return sample
+def _make_model(material, thickness, instrument, free):
+    """A TransmissionModel on the instrument's grid with exactly ``free`` determined."""
     import nbragg
-    if isinstance(material, nbragg.CrossSection):
-        if thickness is None:
+    if isinstance(material, TransmissionModel):
+        if material.grid != instrument.grid:
+            raise ValueError(f"the model is on {material.grid!r}, the instrument on {instrument.grid!r}")
+        model = material.copy()                          # the given model stays as it is
+    elif isinstance(material, (nbragg.CrossSection, nbragg.TransmissionModel)):
+        if isinstance(material, nbragg.CrossSection) and thickness is None:
             raise ValueError("give the thickness of the sample [cm]")
-        model = nbragg.TransmissionModel(material, response="jorgensen_inv", tof_length=instrument.flight_path,
-                                         vary_response=False)
-        model.params["α0"].set(value=instrument.response[0])
-        model.params["β0"].set(value=instrument.response[1])
-    else:                                            # an nbragg TransmissionModel
-        model = material
+        model = TransmissionModel(material, tof_length=instrument.flight_path, frequency=instrument.frequency,
+                                  tstep=instrument.bin_width, vary_basic=True)
+        if isinstance(material, nbragg.CrossSection):
+            for k, v in zip(("α0", "β0"), instrument.response):
+                if k in model.params:
+                    model.params[k].set(value=v)
+    else:
+        raise TypeError("material must be an nbragg CrossSection, an nbragg TransmissionModel or a "
+                        "frame_overlap TransmissionModel")
     if thickness is not None:
         model.params["thickness"].set(value=thickness)
-    return Sample(model, free=free)
+    for name in free:
+        if name != "strain" and name not in model.params:
+            raise KeyError(f"{name!r} is not a parameter of the model; choose from {list(model.params)} or 'strain'")
+    for name, p in model.params.items():
+        if not p.expr:
+            p.set(vary=name in free)
+    model.vary_strain = "strain" in free
+    return model
 
 
 def plan(material, thickness=None, *, target="strain", n_pulses=8, instrument=None, free=None,
@@ -185,10 +197,10 @@ def plan(material, thickness=None, *, target="strain", n_pulses=8, instrument=No
 
     Parameters
     ----------
-    material : nbragg.CrossSection, nbragg.TransmissionModel or Sample
+    material : nbragg.CrossSection, nbragg.TransmissionModel or TransmissionModel
         The sample. A CrossSection gets the moderator response and the flight
-        path of the instrument; a TransmissionModel or Sample is used as
-        given (with ``thickness``, if given).
+        path of the instrument; a model is used with its parameters (and
+        ``thickness``, if given).
     thickness : float
         Sample thickness [cm]; required for a CrossSection.
     target : str
@@ -212,9 +224,10 @@ def plan(material, thickness=None, *, target="strain", n_pulses=8, instrument=No
     free = list(free) if free is not None else ["thickness", "strain"]
     if target not in free:
         free.append(target)
-    sample = _make_sample(material, thickness, instrument, free)
+    model = _make_model(material, thickness, instrument, free)
+    exp = model._experiment(_REF_TIME, openbeam=instrument.beam(_REF_BIN), pattern=Pattern.single(instrument.pulse_width))
+    sample = exp.sample
     sample.check_window(instrument.window)
-    exp = Experiment(sample, instrument.beam(_REF_BIN), Pattern.single(instrument.pulse_width), _REF_TIME)
     counts = sorted({int(n) for n in np.atleast_1d(n_pulses)})
     if counts[0] < 1:
         raise ValueError("n_pulses must be at least 1")
@@ -224,8 +237,9 @@ def plan(material, thickness=None, *, target="strain", n_pulses=8, instrument=No
         if n == 1:
             pat = Pattern.single(instrument.pulse_width)
         else:
-            pat = optimise_pattern(exp, n, target=target, width=instrument.pulse_width, n_restarts=n_restarts,
-                                   n_steps=n_steps, window=instrument.window, seed=seed + n)
+            pat = design.optimise_pattern(exp, n, target=target, width=instrument.pulse_width,
+                                          n_restarts=n_restarts, n_steps=n_steps, window=instrument.window,
+                                          seed=seed + n)
         s = exp.with_pattern(pat).precision(window=instrument.window).set_index("parameter").sigma
         row = dict(n_pulses=n, times_ms=" ".join(f"{t:.2f}" for t in pat.times_ms))
         row.update({f"R_{p}": float((one[p] / s[p]) ** 2) for p in sample.free})
@@ -235,7 +249,8 @@ def plan(material, thickness=None, *, target="strain", n_pulses=8, instrument=No
             print(f"{n} pulses: R({target}) = {row[f'R_{target}']:.2f}", flush=True)
     candidates = pd.DataFrame(rows)
     best = int(candidates.loc[candidates[f"R_{target}"].idxmax(), "n_pulses"])
-    return Plan(instrument, sample, patterns[best], target, candidates, exp)
+    model.pattern = patterns[best]
+    return Plan(instrument, model, patterns[best], target, candidates, exp)
 
 
 class Plan:
@@ -247,6 +262,8 @@ class Plan:
     ----------
     pattern : Pattern
         The pulse pattern chosen for the target.
+    model : TransmissionModel
+        The model with this pattern, to simulate and fit measurements.
     candidates : pandas.DataFrame
         Every number of pulses tried, with its pulse times [ms] and the
         time-reduction factor of each free parameter.
@@ -256,8 +273,9 @@ class Plan:
         precision.
     """
 
-    def __init__(self, instrument, sample, pattern, target, candidates, exp):
-        self.instrument, self.sample, self.pattern, self.target = instrument, sample, pattern, target
+    def __init__(self, instrument, model, pattern, target, candidates, exp):
+        self.instrument, self.model, self.pattern, self.target = instrument, model, pattern, target
+        self.sample = sample = exp.sample
         self.candidates = candidates
         self._exp = exp.with_pattern(pattern)
         self._one = exp.with_pattern(Pattern.single(instrument.pulse_width))
@@ -283,7 +301,7 @@ class Plan:
         n = np.min(self.counts(time, bin_size))
         if n < need:
             warnings.warn(f"only {n:.3g} independent counts per spectrum (below {need:.0e}): the Rietveld fit may "
-                          "scatter more than the bound; check with frame_overlap.monte_carlo", stacklevel=3)
+                          "scatter more than the bound; check with plan.monte_carlo or model.monte_carlo", stacklevel=3)
 
     # ------------------------------------------------------------ results
     def precision(self, time=8 * 3600, bin_size=1.0):
@@ -347,13 +365,23 @@ class Plan:
                 goal = ", ".join(f"{p} {v:g} {_display(p)[1]}" for p, v in targets.items())
                 for b in bin_sizes:
                     lines.append(f"time for {goal}, {b:g} mm bins: {self.time_for(b, **targets) / 3600:.3g} h")
-        lines.append("Cramer-Rao bound of the Rietveld fit; check small bins with frame_overlap.monte_carlo.")
+        lines.append("Cramer-Rao bound of the Rietveld fit; check small bins with plan.monte_carlo.")
         return "\n".join(lines)
 
-    def experiment(self, time=8 * 3600, bin_size=1.0):
-        """The Experiment of this plan for one bin (to simulate and fit a measurement)."""
-        return Experiment(self.sample, self.instrument.beam(bin_size), self.pattern, time,
-                          count_variance=float(self.instrument.F(bin_size)))
+    def _beam(self, bin_size):
+        return dict(openbeam=self.instrument.beam(bin_size), count_variance=float(self.instrument.F(bin_size)))
+
+    def simulate(self, time=8 * 3600, bin_size=1.0, seed=None):
+        """A projected measurement of one square bin of side ``bin_size`` [mm]
+        with the chosen pattern (a Data object; fit it with ``plan.model.fit``)."""
+        return self.model.simulate(time=time, seed=seed, **self._beam(bin_size))
+
+    def monte_carlo(self, n=100, time=8 * 3600, bin_size=1.0, method="rietveld", seed=0, workers=1):
+        """Fit ``n`` simulated measurements of one bin and compare their scatter
+        with the bound (useful for small bins, where the plan warns)."""
+        return self.model.monte_carlo(n=n, time=time, method=method, seed=seed, workers=workers,
+                                      wlmin=self.instrument.window[0], wlmax=self.instrument.window[1],
+                                      **self._beam(bin_size))
 
     def plot(self, time=8 * 3600, bin_sizes=None, **targets):
         """
