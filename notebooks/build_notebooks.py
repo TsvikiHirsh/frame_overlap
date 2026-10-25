@@ -7,10 +7,12 @@ Each notebook is written from the cells below and executed in place, so that
 the repository holds them with their outputs. All examples use simulated data.
 """
 import os
+from datetime import date
 import nbformat as nbf
 from nbconvert.preprocessors import ExecutePreprocessor
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+AUTHOR = "Tsviki Y. Hirsh"
 md = nbf.v4.new_markdown_cell
 code = nbf.v4.new_code_cell
 
@@ -135,9 +137,16 @@ intensities can be fitted as well, at a cost in precision:"""),
 ]
 
 
+def byline(cell):
+    """The author and the date under the title of the first cell."""
+    title, _, rest = cell.source.partition("\n")
+    when = f"{date.today().day} {date.today():%B %Y}"
+    return md(f"{title}\n\n*{AUTHOR}, {when}*\n{rest}")
+
+
 def build(name, cells):
     nb = nbf.v4.new_notebook()
-    nb.cells = cells
+    nb.cells = [byline(cells[0])] + cells[1:]
     nb.metadata["kernelspec"] = {"name": "python3", "display_name": "Python 3", "language": "python"}
     path = os.path.join(HERE, f"{name}.ipynb")
     ExecutePreprocessor(timeout=1800, kernel_name="python3").preprocess(nb, {"metadata": {"path": HERE}})

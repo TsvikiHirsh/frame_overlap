@@ -1,0 +1,59 @@
+"""
+The frame_overlap logo (docs/logo.png), a sibling of nbragg's: four pulse
+spectra with a Bragg edge each, overlapping in one period (colours), the
+counts the detector records (their sum, white), the pulse times (triangles)
+and the name, in a round emblem.
+
+    python docs/make_logo.py
+"""
+import os
+import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
+from matplotlib.patches import Circle
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+COLOURS = ["#ff4f8b", "#21c3c7", "#9b6bff", "#ffa630"]          # nbragg's palette
+STARTS = [-0.80, -0.38, 0.02, 0.40]                             # pulse times (unequal, as optimised ones are)
+BOLD = "/usr/share/texmf/fonts/opentype/public/lm/lmroman10-bold.otf"
+
+
+def spectrum(x, x0):
+    """A thermal spectrum after a pulse at x0, with a Bragg edge (the transmission jumps up)."""
+    u = np.clip(x - x0, 0, None) / 0.09
+    flux = u ** 3 * np.exp(-u) / 1.34                            # peak 1 at u = 3
+    edge = 0.35 + 0.65 / (1 + np.exp(-(x - x0 - 0.5) / 0.008))
+    return 1.1 * flux * edge
+
+
+x = np.linspace(-1.05, 1.05, 2000)
+parts = [spectrum(x, s) + spectrum(x + 2.0, s) for s in STARTS]   # the slow tail wraps around the period
+fig = plt.figure(figsize=(4, 4), dpi=200)
+ax = fig.add_axes([0, 0, 1, 1])
+ax.set_xlim(-1.08, 1.08)
+ax.set_ylim(-1.08, 1.08)
+ax.set_aspect("equal")
+ax.axis("off")
+disc = Circle((0, 0), 1.0, transform=ax.transData)
+ax.add_patch(Circle((0, 0), 1.0, color="#101018", zorder=0))
+base = -0.56
+for part, col in zip(parts, COLOURS):
+    f = ax.fill_between(x, base, base + part, color=col, alpha=0.82, lw=0, zorder=2)
+    f.set_clip_path(disc)
+    ln, = ax.plot(x, base + part, color=col, lw=1.6, zorder=3)
+    ln.set_clip_path(disc)
+total, = ax.plot(x, base + sum(parts), color="white", lw=3.2, zorder=4, solid_capstyle="round")
+total.set_clip_path(disc)
+for s in STARTS:
+    ax.plot(s + 0.02, 0.33, marker="v", color="white", ms=8, zorder=5, clip_on=False)
+ax.plot([-0.95, 0.95], [base, base], color="white", lw=1.0, alpha=0.5, zorder=4).__getitem__(0).set_clip_path(disc)
+font = font_manager.FontProperties(fname=BOLD) if os.path.exists(BOLD) else font_manager.FontProperties(
+    family="serif", weight="bold")
+ax.text(0, 0.6, "frame_overlap", color="white", fontproperties=font, fontsize=21, ha="center", va="center",
+        zorder=6)
+ax.add_patch(Circle((0, 0), 1.0, fill=False, ec="white", lw=9, zorder=7))
+ax.add_patch(Circle((0, 0), 1.045, fill=False, ec="#d8d8d8", lw=1.5, zorder=7))
+fig.savefig(os.path.join(HERE, "logo.png"), transparent=True)
+print("written", os.path.join(HERE, "logo.png"))

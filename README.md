@@ -1,5 +1,9 @@
 # frame_overlap
 
+<p align="center">
+<img src="docs/logo.png" alt="frame_overlap logo" width="200"/>
+</p>
+
 **Bragg-edge imaging with programmable, overlapping neutron pulses, on top of [nbragg](https://github.com/TsvikiHirsh/nbragg).**
 
 At a continuous source with a fast chopper, such as SARAF-II, several pulses per period bring more
